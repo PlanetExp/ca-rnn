@@ -88,9 +88,11 @@ def board_generator(
         connection_length = get_connection_length(board)
 
         if connection_length is None:
-            connectivity = sys.maxsize
+            # connectivity = sys.maxsize
+            connectivity = 0
         else:
-            connectivity = connection_length
+            # connectivity = connection_length
+            connectivity = 1
         
         if (min_connection_length <= connectivity <= max_connection_length):
             # print "success after ", fail_count," failures"
@@ -122,8 +124,11 @@ def generate_constrained_dataset(
     x = np.zeros((num_samples, width, height, depth), np.int)  # boards
     y = np.zeros((num_samples, ), np.int)  # connection length
 
-    positive_board_generator = board_generator(size, 0, theoretical_max_length, stone_probability=stone_probability)
-    negative_board_generator = board_generator(size, sys.maxsize, sys.maxsize, stone_probability=stone_probability)
+    positive_board_generator = board_generator(size, 1, 1, stone_probability=stone_probability)
+    negative_board_generator = board_generator(size, 0, 0, stone_probability=stone_probability)
+
+    if verbose:
+        print('Starting to generate boards')
 
     for i in range(num_samples):
         if i < num_positive_examples:
@@ -131,7 +136,7 @@ def generate_constrained_dataset(
         else:
             x[i], y[i] = next(negative_board_generator)
 
-        if verbose and (i + 1) % 100 == 0:
+        if verbose and (i + 1) % (num_samples / 100) == 0:
             if i < num_positive_examples:
                 print('Positive boards generated: {}'.format(i + 1))
             else:
@@ -140,6 +145,12 @@ def generate_constrained_dataset(
     # my_dir = os.path.dirname(filename)
     # if not os.path.exists(my_dir):
     #     os.makedirs(my_dir)
+
+    # ad-hoc shuffling
+    # NOTE: creates copies
+    perm = np.random.permutation(len(x))
+    x = x[perm]
+    y = y[perm]
 
     # generate appropriate filename
     filename = filename + '_' + str(num_samples) + 'x' + str(width) + 'x' + str(height) + 'x' + str(depth) + '.tfrecords'
