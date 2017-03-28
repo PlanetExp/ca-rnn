@@ -48,6 +48,10 @@ def run_training():
                 if step % 100 == 0:
                     print('steps: {steps} num_examples: {num_examples:,} average_loss: {avg_loss:.4}'.format(avg_loss=(total_loss / step), steps=step, num_examples=num_examples))
 
+                if step % 500 == 0:  # evaluate once in a while
+                    loss, prediction = sess.run([model.loss, model.prediction])
+                    print('Evaluating at step: {steps} accuracy: {accuracy:.4}'.format(steps=step, accuracy=prediction))
+
                 if step == FLAGS.max_steps:  # stop early
                     coord.request_stop()
 

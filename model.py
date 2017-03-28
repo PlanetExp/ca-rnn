@@ -1,4 +1,5 @@
 import tensorflow as tf
+import numpy as np
 
 
 class ExtendedGRUcell(tf.contrib.rnn.GRUCell):
@@ -53,8 +54,7 @@ class Model(object):
             additional_cell_args = {}
             if self._cell_name == 'lstm':
                 cell_fn = tf.contrib.rnn.LSTMCell
-            elif self._cell_name == 'grid1lstm':
-                cell_fn = tf.contrib.grid_rnn.Grid1LSTMCell
+                # additional_cell_args.update({'state_is_tuple': True})
             elif self._cell_name == 'grid2lstm':
                 cell_fn = tf.contrib.grid_rnn.Grid2LSTMCell
                 additional_cell_args.update({'tied': True})
@@ -63,27 +63,89 @@ class Model(object):
                 additional_cell_args.update({'state_is_tuple': True, 'num_frequency_blocks': [1]})
             else:
                 raise Exception('Unsupported cell_name: {}'.format(self._cell_name))
-            cell = cell_fn(num_units=self._state_size, **additional_cell_args)
 
-            print('DEBUG: cell state_size: ', cell._config.recurrents)
+            cell = cell_fn(self._state_size, **additional_cell_args)
+            # initial_state = cell.zero_state(self._batch_size, tf.float32)
 
             # inputs
             self._input_data, self._targets = self._input_pipeline()
-            initial_state = cell.zero_state(self._batch_size, tf.float32)  # possibly x
             
+            # with tf.device('/cpu:0'):
+            # [batch, width, height, depth]
+            # inputs = tf.reshape(self._input_data, [self._batch_size, self._rnn_size, 1])
+            # inputs = tf.unstack(inputs, axis=1)
+
+            # batch x width x height x depth
+            # perm = [1, 2, 3, 0]
+            # width x height x depth x batch
+            # inputs = tf.transpose(self._input_data, perm)
+
+            # batch x width
+            inputs = self._input_data
+            inputs = tf.squeeze(inputs)
+
+            generations = 3
+
+            '''
+            for g in range(1):
+                for i in range(len(a)):
+                    index = i + 2
+                    n = a[max(0, index - 3):index]
+                    print (n)
+            '''
+
+            # zero_states
+            c_zero = tf.zeros([self._batch_size, self._state_size])
+            h_zero = tf.zeros([self._batch_size, self._state_size])
+            zero_state = tf.contrib.rnn.LSTMStateTuple(c_zero, h_zero)
+            states = [zero_state] * self._rnn_size
+
+            outputs = []
+            inputs_as_list = tf.split(inputs, int(inputs.get_shape()[1]), axis=1)
+            reuse = True
+            with tf.variable_scope('lstm_grid') as scope:
+                for g in range(generations):
+
+                    for i, input_ in enumerate(inputs_as_list):
+                        if reuse and i > 0:
+                            scope.reuse_variables()
+
+                        index = i + 2
+                        neigh_states = states[max(0, index - 3): index]  # strided_slice
+
+                        # pad with zero or maybe clamp sides?
+                        if (len(neigh_states) < 3):
+                            neigh_states.append(zero_state)
+                        # TODO: left/right
+
+                        # concat neighouring states
+                        # c_state = tf.concat([neigh_states[j].c for j in range(len(neigh_states))], 1)
+                        # h_state = tf.concat([neigh_states[j].h for j in range(len(neigh_states))], 1)
+                        # TODO: size grows per generation
+
+                        # elementwise multiply neighbour states, essentially a conv
+                        c_state = neigh_states[2].c
+                        h_state = neigh_states[2].h
+                        for m in range(len(neigh_states) - 1):
+                            c_state *= neigh_states[m].c
+                            h_state *= neigh_states[m].h
+                        state = tf.contrib.rnn.LSTMStateTuple(c_state, h_state)
+
+                        # print (state)
+                        (output, new_state) = cell(input_, state, scope)
+                        states[i] = new_state
+
+                        if g == generations - 1:  # last generation
+                            outputs.append(output)
+
             # rnn
             with tf.variable_scope('rnn'):
                 # V matrixes
                 softmax_w = tf.get_variable('softmax_w', [self._rnn_size * self._state_size, self._num_classes])
                 softmax_b = tf.get_variable('softmax_b', [self._num_classes])
 
-                with tf.device('/cpu:0'):
-                    # [batch, width, height, depth]
-                    inputs = tf.reshape(self._input_data, [self._batch_size, self._rnn_size, 1])
-                    inputs = tf.unstack(inputs, axis=1)
-
                 # inputs: A length T list of inputs, each a Tensor of shape [batch_size, input_size]
-                outputs, final_state = tf.contrib.rnn.static_rnn(cell, inputs, initial_state=initial_state)
+                # outputs, final_state = tf.contrib.rnn.static_rnn(cell, inputs, initial_state=initial_state)
 
             with tf.name_scope('softmax'):
                 output = tf.concat(outputs, 1)
