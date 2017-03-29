@@ -93,3 +93,6 @@ ENV/
 # Mac specific
 .DS_Store
 sublime/
+
+# Experiment specific
+tmp/

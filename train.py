@@ -1,67 +1,90 @@
 import tensorflow as tf
 
-import argparse
-import os.path
-import sys
+from datetime import datetime
 import time
 
-from model import Model
+import model
 
-# Basic model parameters as external flags.
-FLAGS = None
+
+# Basic parameters.
+FLAGS = tf.app.flags.FLAGS  # tensorflows internal argparse
+tf.app.flags.DEFINE_string('train_dir', 'tmp/train',
+                           '''Directory where to write event logs.'''
+                           '''and checkpoint.''')
+tf.app.flags.DEFINE_integer('max_steps', 2000,
+                            '''Number of batches to run.''')
+tf.app.flags.DEFINE_boolean('log_device_placement', False,
+                            '''Whether to log device placement.''')
+tf.app.flags.DEFINE_integer('log_frequency', 100,
+                            '''How often to log results to the console.''')
 
 
 def run_training():
+    '''
+    version 0.2
+        + separates training and eval
+        + uses new monitored session object
+        + switched from argparse to tf.app.flags in order to share flags between files (tf magic)
+    '''
+    with tf.Graph().as_default():
+        global_step = tf.contrib.framework.get_or_create_global_step()
 
-    model = Model(
-        batch_size=FLAGS.batch_size,
-        state_size=FLAGS.state_size,
-        num_classes=FLAGS.num_classes,
-        rnn_size=FLAGS.rnn_size,
-        learning_rate=FLAGS.learning_rate,
-        cell_name=FLAGS.cell_name)
+        # model = Model(
+        #     batch_size=FLAGS.batch_size,
+        #     state_size=FLAGS.state_size,
+        #     num_classes=FLAGS.num_classes,
+        #     rnn_size=FLAGS.rnn_size,
+        #     learning_rate=FLAGS.learning_rate,
+        #     cell_name=FLAGS.cell_name)
 
-    init = tf.global_variables_initializer()
-    init_local = tf.local_variables_initializer()  # init local variable epochs if used
+        # Get training inputs
+        boards, labels = model.train_inputs()
 
-    num_examples = 0
-    with tf.Session() as sess:
-        sess.run([init, init_local])
+        # Build Graph that computes logits predictions from inference
+        logits = model.inference(boards)
 
-        coord = tf.train.Coordinator()
-        threads = tf.train.start_queue_runners(sess=sess, coord=coord)
-        
-        # writer = tf.summary.FileWriter('./graphs/run1', sess.graph)
+        # Calculate loss from loss function
+        loss = model.loss(logits, labels)
 
-        try:
-            step = 0
-            total_loss = .0
-            print('{:#^40}'.format(' Training ' + FLAGS.cell_name + ' '))
-            print()
-            while not coord.should_stop():
-                step += 1
+        # Build Graph that trains the model one batch at the time
+        # and update parameters
+        train_op = model.optimizer(loss, global_step)
 
-                loss, _ = sess.run([model.loss, model.optimizer])
-                total_loss += loss
+        class _LoggerHook(tf.train.SessionRunHook):
+            '''Hook that logs loss and runtime.'''
 
-                num_examples = num_examples + FLAGS.batch_size
-                if step % 100 == 0:
-                    print('steps: {steps} num_examples: {num_examples:,} average_loss: {avg_loss:.4}'.format(avg_loss=(total_loss / step), steps=step, num_examples=num_examples))
+            def begin(self):
+                self._step = -1
+                self._start_time = time.time()
 
-                if step == FLAGS.max_steps:  # stop early
-                    coord.request_stop()
+            def before_run(self, run_context):
+                self._step += 1
+                return tf.train.SessionRunArgs(loss)  # fetches, can be list
 
-        except tf.errors.OutOfRangeError:
-            # print('Done training for %d epochs, %d steps.' % (num_epochs, step))
-            print('Requesting to stop')
-            coord.request_stop()
-        finally:
-            coord.request_stop()  # ask threads to to stop
-            coord.join(threads)  # wait for threads to finish
+            def after_run(self, run_context, run_values):
+                if self._step % FLAGS.log_frequency == 0:
+                    current_time = time.time()
+                    duration = current_time - self._start_time
+                    self._start_time = current_time
 
-            print('{:#^40}'.format(' Finished '))
+                    loss_value = run_values.results
+                    examples_per_sec = FLAGS.log_frequency * FLAGS.batch_size / duration
+                    sec_per_batch = float(duration / FLAGS.log_frequency)
 
-        # writer.close()
+                    format_str = ('%s: step %d, loss = %.4f (%.1f examples/sec; %.3f '
+                        'sec/batch)')
+                    print (format_str % (datetime.now(), self._step, loss_value,
+                               examples_per_sec, sec_per_batch))
+
+        with tf.train.MonitoredTrainingSession(
+            checkpoint_dir=FLAGS.train_dir,
+            hooks=[tf.train.StopAtStepHook(last_step=FLAGS.max_steps),
+                   tf.train.NanTensorHook(loss),
+                   _LoggerHook()],
+            config=tf.ConfigProto(
+                log_device_placement=FLAGS.log_device_placement)) as mon_sess:
+            while not mon_sess.should_stop():
+                mon_sess.run(train_op)
 
 
 def main(argv=None):
@@ -69,49 +92,4 @@ def main(argv=None):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        '--learning_rate',
-        type=float,
-        default=0.01,
-        help='Initial learning rate.'
-    )
-    parser.add_argument(
-        '--max_steps',
-        type=int,
-        default=2000,
-        help='Number of steps to run trainer.'
-    )
-    parser.add_argument(
-        '--state_size',
-        type=int,
-        default=8,
-        help='State size of cells.'
-    )
-    parser.add_argument(
-        '--cell_name',
-        type=str,
-        default='lstm',
-        help='Name of cell function to use.'
-    )
-    parser.add_argument(
-        '--rnn_size',
-        type=int,
-        default=5,
-        help='Size of the rnn.'
-    )
-    parser.add_argument(
-        '--num_classes',
-        type=int,
-        default=2,
-        help='Number of target classes.'
-    )
-    parser.add_argument(
-        '--batch_size',
-        type=int,
-        default=128,
-        help='Batch size. Must divide evenly into the dataset sizes.'
-    )
-
-    FLAGS, unparsed = parser.parse_known_args()
-    tf.app.run(main=main, argv=[sys.argv[0]] + unparsed)
+    tf.app.run()  # automatically adds flags
