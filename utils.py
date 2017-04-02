@@ -95,7 +95,7 @@ def board_generator(
             connectivity = 1
         
         if (min_connection_length <= connectivity <= max_connection_length):
-            # print "success after ", fail_count," failures"
+            # print ("success after ", fail_count, " failures")
             fail_count = 0  # reset counter
             yield board, connectivity  # X, y
         else:
@@ -103,59 +103,49 @@ def board_generator(
 
 
 def generate_constrained_dataset(
-        filename,
-        size,
-        num_positive_examples,
-        num_negative_examples,
-        stone_probability=0.5,
-        k_value=2,
-        verbose=False):
-
-    if 3 < len(size) > 3:
-        print('Dimensions must be [w, h, d] currently.')
-        return
+        # filename,
+        # size,
+        # num_positive_examples,
+        # num_negative_examples,
+        # stone_probability=0.5,
+        # k_value=2,
+        # verbose=False):
+        filepath,
+        progress_fn=None,
+        num_examples=None,
+        size=None):
 
     width = size[0]
     height = size[1]
     depth = size[2]
 
-    num_samples = num_positive_examples + num_negative_examples
-    theoretical_max_length = int(height * width / 2 + width / 2)
-    x = np.zeros((num_samples, width, height, depth), np.int)  # boards
-    y = np.zeros((num_samples, ), np.int)  # connection length
+    # theoretical_max_length = int(height * width / 2 + width / 2)
+    inputs = np.empty((num_examples, width, height, depth), np.int)  # boards
+    labels = np.empty((num_examples, ), np.int)  # connection length
 
-    positive_board_generator = board_generator(size, 1, 1, stone_probability=stone_probability)
-    negative_board_generator = board_generator(size, 0, 0, stone_probability=stone_probability)
+    pos_board_generator = board_generator(size, 1, 1)
+    neg_board_generator = board_generator(size, 0, 0)
 
-    if verbose:
-        print('Starting to generate boards')
+    num_pos_examples = num_examples // 2
 
-    for i in range(num_samples):
-        if i < num_positive_examples:
-            x[i], y[i] = next(positive_board_generator)
+    for i in range(num_examples):
+        if i < num_pos_examples:
+            inputs[i], labels[i] = next(pos_board_generator)
         else:
-            x[i], y[i] = next(negative_board_generator)
+            inputs[i], labels[i] = next(neg_board_generator)
 
-        if verbose and (i + 1) % (num_samples / 100) == 0:
-            if i < num_positive_examples:
-                print('Positive boards generated: {}'.format(i + 1))
-            else:
-                print('Negative boards generated: {}'.format(i + 1 - num_positive_examples))
-
-    # my_dir = os.path.dirname(filename)
-    # if not os.path.exists(my_dir):
-    #     os.makedirs(my_dir)
+        if i % 1000 == 0:
+            print('Generating {} boards. Progress: {}/{}'.format(
+                'positive' if i < num_pos_examples else 'negative', i, num_examples))
 
     # ad-hoc shuffling
     # NOTE: creates copies
-    perm = np.random.permutation(len(x))
-    x = x[perm]
-    y = y[perm]
+    perm = np.random.permutation(len(inputs))
+    inputs = inputs[perm]
+    labels = labels[perm]
 
-    # generate appropriate filename
-    filename = filename + '_' + str(num_samples) + 'x' + str(width) + 'x' + str(height) + 'x' + str(depth) + '.tfrecords'
-    convert_to_tfrecords(x, y, filename)
-    return
+    # save to file
+    convert_to_tfrecords(inputs, labels, filepath)
 
 
 def _bytes_feature(value):
@@ -166,9 +156,9 @@ def _int64_feature(value):
     return tf.train.Feature(int64_list=tf.train.Int64List(value=[value]))
 
 
-def convert_to_tfrecords(x, y, filename):
-    print('Writing', filename)
-    writer = tf.python_io.TFRecordWriter(filename)
+def convert_to_tfrecords(x, y, filepath):
+    print('Writing', filepath)
+    writer = tf.python_io.TFRecordWriter(filepath)
     
     for i in range(len(x)):
         features = x[i].tobytes()

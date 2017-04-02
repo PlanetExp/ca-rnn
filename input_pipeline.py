@@ -3,35 +3,41 @@ import tensorflow as tf
 import os
 
 
-def read_and_decode(filename_queue):
+INPUTS_SIZE = (9, 1, 1)
+NUM_CLASSES = 2
+
+
+def read_and_decode(filename_queue, scope=None):
         # read
-        reader = tf.TFRecordReader()
-        _, serialized_example = reader.read(filename_queue)
+        with tf.name_scope(scope or 'read_and_decode'):
+            reader = tf.TFRecordReader()
+            _, serialized_example = reader.read(filename_queue)
 
-        feature_map = {
-            'x': tf.FixedLenFeature(
-                shape=[], dtype=tf.string),
-            'y': tf.FixedLenFeature(
-                shape=[], dtype=tf.int64,
-                default_value=None)
-        }
-        parsed = tf.parse_single_example(serialized_example, feature_map)
+            feature_map = {
+                'x': tf.FixedLenFeature(
+                    shape=[], dtype=tf.string),
+                'y': tf.FixedLenFeature(
+                    shape=[], dtype=tf.int64,
+                    default_value=None)
+            }
+            parsed = tf.parse_single_example(serialized_example, feature_map)
 
-        # decode
-        width = 5
-        height = 1
-        depth = 1
+            # decode
+            width = INPUTS_SIZE[0]
+            height = INPUTS_SIZE[1]
+            depth = INPUTS_SIZE[2]
 
-        features = tf.decode_raw(parsed['x'], tf.int64)
-        features = tf.reshape(features, [width, height, depth])
-        features = tf.cast(features, dtype=tf.float32)
-        labels = parsed['y']
+            features = tf.decode_raw(parsed['x'], tf.int64)
+            features = tf.reshape(features, [width, height, depth])
+            features = tf.cast(features, dtype=tf.float32)
+            labels = parsed['y']
+            labels = tf.one_hot(labels, 2, on_value=1, dtype=tf.int32)
 
         return features, labels
 
 
-def _generate_batch(features, labels, batch_size, shuffle):
-    min_after_dequeue = 5000
+def _generate_batch(features, labels, batch_size, scope=None, shuffle=True):
+    min_after_dequeue = 10000
     capacity = min_after_dequeue + 3 + batch_size
 
     if shuffle:
@@ -54,34 +60,32 @@ def _generate_batch(features, labels, batch_size, shuffle):
 
 
 def train_inputs(data_dir, batch_size):
-    filenames = [os.path.join(data_dir, 'data_batch_%d.tfrecords' % i)
-                 for i in range(1, 2)]
-    for f in filenames:
-        if not tf.gfile.Exists(f):
-            raise ValueError('Failed to find file: ' + f)
+    # Name scope inputs to beautify Tensorboard graph
+    with tf.name_scope('train_inputs') as scope:
+        filenames = [os.path.join(data_dir, 'data_batch_%d.tfrecords' % i)
+                     for i in range(1, 2)]
+        for f in filenames:
+            if not tf.gfile.Exists(f):
+                raise ValueError('Failed to find file: ' + f)
 
-    filename_queue = tf.train.string_input_producer(filenames)
-    # filename_queue = tf.train.string_input_producer(
-    #     ['data/const_train_1_200000x5x1x1.tfrecords',
-    #      'data/const_train_2_200000x5x1x1.tfrecords'], num_epochs=None)
+        filename_queue = tf.train.string_input_producer(filenames)
+        features, labels = read_and_decode(filename_queue, scope)
 
-    features, labels = read_and_decode(filename_queue)
-
-    return _generate_batch(features, labels, batch_size, shuffle=True)
+    return _generate_batch(features, labels, batch_size, scope, shuffle=True)
 
 
 def inputs(data_dir, eval_data, batch_size):
+    with tf.name_scope('inputs') as scope:
+        if not eval_data:
+            filenames = [os.path.join(data_dir, 'data_batch_%d.tfrecords' % i)
+                         for i in range(1, 2)]
+        else:
+            filenames = [os.path.join(data_dir, 'test_batch.tfrecords')]
 
-    if not eval_data:
-        filenames = [os.path.join(data_dir, 'data_batch_%d.tfrecords' % i)
-                     for i in range(1, 2)]
-    else:
-        filenames = [os.path.join(data_dir, 'test_batch.tfrecords')]
+        for f in filenames:
+            if not tf.gfile.Exists(f):
+                raise ValueError('Failed to find file: ' + f)
 
-    for f in filenames:
-        if not tf.gfile.Exists(f):
-            raise ValueError('Failed to find file: ' + f)
-
-    filename_queue = tf.train.string_input_producer(filenames)
-    features, labels = read_and_decode(filename_queue)
+        filename_queue = tf.train.string_input_producer(filenames)
+        features, labels = read_and_decode(filename_queue)
     return _generate_batch(features, labels, batch_size, shuffle=False)

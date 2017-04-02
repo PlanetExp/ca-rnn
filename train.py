@@ -6,12 +6,25 @@ import time
 import model
 
 
-# Basic parameters.
-FLAGS = tf.app.flags.FLAGS  # tensorflows internal argparse
+FLAGS = tf.app.flags.FLAGS
+'''Global flags interface for command line arguments
+
+    flag_name, default_value, doc_string
+
+Usage:
+    python <file> [--flag_name=value]
+
+Uses argparse module internally
+See: https://www.tensorflow.org/api_docs/python/tf/flags
+'''
+
 tf.app.flags.DEFINE_string('train_dir', 'tmp/train',
                            '''Directory where to write event logs.'''
                            '''and checkpoint.''')
-tf.app.flags.DEFINE_integer('max_steps', 2000,
+tf.app.flags.DEFINE_string('model_name', 'conv',
+                           '''Select which model to train.'''
+                           '''Either conv or rnn.''')
+tf.app.flags.DEFINE_integer('max_steps', 1000,
                             '''Number of batches to run.''')
 tf.app.flags.DEFINE_boolean('log_device_placement', False,
                             '''Whether to log device placement.''')
@@ -21,7 +34,9 @@ tf.app.flags.DEFINE_integer('log_frequency', 100,
 
 def run_training():
     '''
-    version 0.2
+    version 0.1
+        + added model selector
+        + added automatic generation of training and testing data if none exists
         + separates training and eval
         + uses new monitored session object
         + switched from argparse to tf.app.flags in order to share flags between files (tf magic)
@@ -29,39 +44,44 @@ def run_training():
     with tf.Graph().as_default():
         global_step = tf.contrib.framework.get_or_create_global_step()
 
-        # model = Model(
-        #     batch_size=FLAGS.batch_size,
-        #     state_size=FLAGS.state_size,
-        #     num_classes=FLAGS.num_classes,
-        #     rnn_size=FLAGS.rnn_size,
-        #     learning_rate=FLAGS.learning_rate,
-        #     cell_name=FLAGS.cell_name)
+        # Select which model class to train.
+        if FLAGS.model_name == 'conv':
+            model_fn = model.CAConv
+        elif FLAGS.model_name == 'rnn':
+            model_fn = model.CARNN
+        else:
+            raise Exception('Unsupported model_name: {}'.format(FLAGS.model_name))
+        mdl = model_fn()
 
         # Get training inputs
-        boards, labels = model.train_inputs()
+        boards, labels = mdl.train_inputs()
 
         # Build Graph that computes logits predictions from inference
-        logits = model.inference(boards)
+        logits = mdl.inference(boards)
 
         # Calculate loss from loss function
-        loss = model.loss(logits, labels)
+        loss = mdl.loss(logits, labels)
 
         # Build Graph that trains the model one batch at the time
         # and update parameters
-        train_op = model.optimizer(loss, global_step)
+        train_op = mdl.optimizer(loss, global_step)
 
         class _LoggerHook(tf.train.SessionRunHook):
             '''Hook that logs loss and runtime.'''
 
             def begin(self):
+                '''Step to run before run starts'''
                 self._step = -1
                 self._start_time = time.time()
 
             def before_run(self, run_context):
+                '''Step to run before every fetch'''
                 self._step += 1
                 return tf.train.SessionRunArgs(loss)  # fetches, can be list
 
             def after_run(self, run_context, run_values):
+                '''Step tun run after every fetch'''
+                # Output logs at log_frequency steps
                 if self._step % FLAGS.log_frequency == 0:
                     current_time = time.time()
                     duration = current_time - self._start_time
@@ -76,6 +96,9 @@ def run_training():
                     print (format_str % (datetime.now(), self._step, loss_value,
                                examples_per_sec, sec_per_batch))
 
+        # Start a monitored training session that runs above hook function at every step
+        # and manages queue runners and checkpoints automatically.
+        # See: 
         with tf.train.MonitoredTrainingSession(
             checkpoint_dir=FLAGS.train_dir,
             hooks=[tf.train.StopAtStepHook(last_step=FLAGS.max_steps),
@@ -88,8 +111,16 @@ def run_training():
 
 
 def main(argv=None):
+    model.maybe_generate_data()
+    # flush train_dir
+    # remove this to start training where train_op previously left off
+    if tf.gfile.Exists(FLAGS.train_dir):
+        tf.gfile.DeleteRecursively(FLAGS.train_dir)
+    tf.gfile.MakeDirs(FLAGS.train_dir)
     run_training()
 
 
 if __name__ == '__main__':
-    tf.app.run()  # automatically adds flags
+    # Run program with optional 'main' function and 'argv' list.
+    # main() by default
+    tf.app.run()
