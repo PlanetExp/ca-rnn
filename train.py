@@ -17,7 +17,6 @@ Usage:
 Uses argparse module internally
 See: https://www.tensorflow.org/api_docs/python/tf/flags
 '''
-
 tf.app.flags.DEFINE_string('train_dir', 'tmp/train',
                            '''Directory where to write event logs.'''
                            '''and checkpoint.''')
@@ -99,6 +98,8 @@ def run_training():
         # Start a monitored training session that runs above hook function at every step
         # and manages queue runners and checkpoints automatically.
         # See: 
+
+        # debug = 1
         with tf.train.MonitoredTrainingSession(
             checkpoint_dir=FLAGS.train_dir,
             hooks=[tf.train.StopAtStepHook(last_step=FLAGS.max_steps),
@@ -107,6 +108,11 @@ def run_training():
             config=tf.ConfigProto(
                 log_device_placement=FLAGS.log_device_placement)) as mon_sess:
             while not mon_sess.should_stop():
+                # if debug % 100 == 0:
+                    # log, preds, corr = mon_sess.run([logits, pred_op, correct])
+                    # print('logits\n', log[0:5], 'pred:', preds, 'corr:\n', corr[0:5])
+                # debug += 1
+
                 mon_sess.run(train_op)
 
 

@@ -4,26 +4,34 @@ import input_pipeline
 import utils
 import os
 import sys
+import re
 
-# Global flags interface for command line arguments
-# Uses the argparse module internally
-# See: https://www.tensorflow.org/api_docs/python/tf/flags
 FLAGS = tf.app.flags.FLAGS
+'''Global flags interface for command line arguments
 
-# flag_name, default_value, doc_string
-# Usage: python <file> [--flag_name=value]
+Definition:
+    flag_name, default_value, doc_string
+
+Usage:
+    python <file> [--flag_name=value]
+    python <file> --help
+        to list them all
+
+Uses argparse module internally.
+See: https://www.tensorflow.org/api_docs/python/tf/flags
+'''
 tf.app.flags.DEFINE_integer('batch_size', 128,
                             '''Size of batch.''')
-tf.app.flags.DEFINE_integer('state_size', 16,
+tf.app.flags.DEFINE_integer('state_size', 32,
                             '''Size of cell states.''')
 tf.app.flags.DEFINE_integer('rnn_size', 5,
                             '''Size of rnn.''')
-tf.app.flags.DEFINE_integer('learning_rate', 0.1,
+tf.app.flags.DEFINE_integer('learning_rate', 0.001,
                             '''Learning rate.''')
 tf.app.flags.DEFINE_integer('num_classes', 2,
                             '''Number of label classes.''')
 tf.app.flags.DEFINE_integer('num_layers', 10,
-                            '''Number of generations or layers of cellular automata to generate.''')
+                            '''Number of generations or layers of cellular automaton to generate.''')
 tf.app.flags.DEFINE_string('data_dir', 'tmp/data',
                            '''Path to the data directory.''')
 tf.app.flags.DEFINE_string('cell_name', 'lstm',
@@ -32,8 +40,8 @@ tf.app.flags.DEFINE_boolean('reuse', True,
                            '''Whether to reuse weight variables or not.''')
 
 # Global constants
-INPUTS_SIZE = input_pipeline.INPUTS_SIZE
-NUM_EXAMPLES = 10000
+INPUTS_SHAPE = input_pipeline.INPUTS_SHAPE
+NUM_EXAMPLES = input_pipeline.NUM_EXAMPLES
 
 '''
 version 0.1
@@ -46,6 +54,23 @@ version 0.1
     - removed model class in favor to scrips
     - removed @properties in favor of external creation (less complexity)
 '''
+
+
+def _activation_summary(x):
+    """Helper to create summaries for activations.
+    Creates a summary that provides a histogram of activations.
+    Creates a summary that measures the sparsity of activations.
+    Args:
+      x: Tensor
+    Returns:
+      nothing
+    """
+    # Remove 'tower_[0-9]/' from the name in case this is a multi-GPU training
+    # session. This helps the clarity of presentation on tensorboard.
+    tensor_name = re.sub('%s_[0-9]*/' % 'laptop', '', x.op.name)
+    tf.summary.histogram(tensor_name + '/activations', x)
+    tf.summary.scalar(tensor_name + '/sparsity',
+                      tf.nn.zero_fraction(x))
 
 
 def maybe_generate_data():
@@ -63,9 +88,8 @@ def maybe_generate_data():
 
     # generate training batches
     # constrained
-    num_examples = NUM_EXAMPLES
-    size = INPUTS_SIZE
     num_files = 2
+    stone_probability = 0.45
     filenames = ['data_batch_%d.tfrecords' % i for i in range(1, num_files + 1)]
 
     for filename in filenames:
@@ -73,22 +97,25 @@ def maybe_generate_data():
         if not os.path.exists(filepath):
             print('%s not found - generating...' % filename)
             utils.generate_constrained_dataset(filepath, _progress, **{
-                'num_examples': num_examples,
-                'size': size})
+                'num_examples': NUM_EXAMPLES,
+                'stone_probability': stone_probability,
+                'shape': INPUTS_SHAPE})
             print()
             statinfo = os.stat(filepath)
             print('Successfully generated', filename, statinfo.st_size, 'bytes.')
 
     # generate testing batches
     # random
+    # TODO
     filename = 'test_batch.tfrecords'
     filepath = os.path.join(dest_dir, filename)
     if not os.path.exists(filepath):
         print('%s not found - generating...' % filename)
         # utils.generate_dataset(filepath, _progress, **{
         utils.generate_constrained_dataset(filepath, _progress, **{
-            'num_examples': num_examples,
-            'size': size})
+            'num_examples': NUM_EXAMPLES,
+            'stone_probability': stone_probability,
+            'shape': INPUTS_SHAPE})
         print()
         statinfo = os.stat(filepath)
         print('Successfully generated', filename, statinfo.st_size, 'bytes.')
@@ -96,14 +123,14 @@ def maybe_generate_data():
 
 class CABaseModel(object):
     '''
-    CA model base class containing inputs streams and the shared static methods,
-    - loss: loss function
-    - optimizer: training op
-    - prediction: prediction op
+    CA model base class containing inputs streams and the shared static methods:
+        - loss: loss function
+        - optimizer: training op
+        - prediction: prediction op
 
     Inference is implemented in each model inheriting this base class.
-    It should contain,
-    - inference: inference op, returning logits
+    It should contain:
+        - inference: inference op, returning logits
 
     Models contains two separate input streams, one distorted input for training
     and one for testing.
@@ -115,56 +142,66 @@ class CABaseModel(object):
     def inference(self, inputs):
         assert 'Inference not implemented.'
 
-    @staticmethod
-    def loss(logits, labels):
+    def loss(self, logits, labels):
         # loss function
         with tf.name_scope('loss'):
             # Compute moving averages of all individual losses and total loss
-            # cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(
-            cross_entropy = tf.nn.softmax_cross_entropy_with_logits(
+            labels = tf.cast(labels, tf.int64)
+            cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(
                 logits=logits, labels=labels, name='cross_entropy')
-            cross_entropy_mean = tf.reduce_mean(cross_entropy)
 
+            # cross_entropy_mean = tf.reduce_mean(cross_entropy)
             # Add all losses to graph
-            tf.add_to_collection('losses', cross_entropy_mean)
-            loss = tf.add_n(tf.get_collection('losses'), name='total_loss')
+            # tf.add_to_collection('losses', cross_entropy_mean)
+            # The total loss is defined as the cross entropy loss plus all of the weight
+            # decay terms (L2 loss).
+            # loss = tf.add_n(tf.get_collection('losses'), name='total_loss')
+
+            loss = tf.reduce_mean(cross_entropy)
         return loss
     
-    @staticmethod
-    def optimizer(total_loss, global_step):
+    def optimizer(self, total_loss, global_step):
         # optimizer train_op
 
         # TRY: lr = tf.train.exponential_decay
 
         # Generate moving averages of all losses
-        loss_averages = tf.train.ExponentialMovingAverage(0.9, name='avg')
-        losses = tf.get_collection('losses')
-        loss_averages_op = loss_averages.apply(losses + [total_loss])
+        # loss_averages = tf.train.ExponentialMovingAverage(0.9, name='avg')
+        # losses = tf.get_collection('losses')
+        # loss_averages_op = loss_averages.apply(losses + [total_loss])
+
+        # Attach a scalar summary to all individual losses and the total loss; do the
+        # same for the averaged version of the losses.
+        # for l in losses + [total_loss]:
+        #     # Name each loss as '(raw)' and name the moving average version of the loss
+        #     # as the original loss name.
+        #     tf.summary.scalar(l.op.name + ' (raw)', l)
+        #     tf.summary.scalar(l.op.name, loss_averages.average(l))
 
         # Compute gradients
         # Creates an average of all losses before applying minimize to optimizer op
-        with tf.control_dependencies([loss_averages_op]):
-            optimizer = tf.train.AdamOptimizer(FLAGS.learning_rate)
-            grads = optimizer.compute_gradients(total_loss)  # minimize() 1/2
+        # with tf.control_dependencies([loss_averages_op]):
+        #     optimizer = tf.train.AdamOptimizer(FLAGS.learning_rate)
+        #     grads = optimizer.compute_gradients(total_loss)  # minimize() 1/2
 
-        # Apply gradients
-        # minimize() 2/2
-        apply_gradient_op = optimizer.apply_gradients(grads, global_step=global_step)
+        # # Apply gradients
+        # # minimize() 2/2
+        # apply_gradient_op = optimizer.apply_gradients(grads, global_step=global_step)
 
         # Track the moving averages of all trainable variables.
-        variable_averages = tf.train.ExponentialMovingAverage(0.9999, global_step)
-        variables_averages_op = variable_averages.apply(tf.trainable_variables())
+        # variable_averages = tf.train.ExponentialMovingAverage(0.9999, global_step)
+        # variables_averages_op = variable_averages.apply(tf.trainable_variables())
 
         # Execute operations defined as arguments to control_dependencies before what's
         # inside its name scope.
-        with tf.control_dependencies([apply_gradient_op, variables_averages_op]):
-            train_op = tf.no_op(name='train')
+        # with tf.control_dependencies([apply_gradient_op, variables_averages_op]):
+        #     train_op = tf.no_op(name='train')
 
-        # optimizer = tf.train.AdamOptimizer(self._lr).minimize(loss)  # simple version of above
+        # simple version of above
+        train_op = tf.train.AdamOptimizer(FLAGS.learning_rate).minimize(total_loss, global_step=global_step)  
         return train_op
 
-    @staticmethod
-    def prediction(logits, labels, k):
+    def prediction(self, logits, labels):
         '''Evaluate the quality of the logits at predicting the label.
         
         Args:
@@ -173,7 +210,7 @@ class CABaseModel(object):
                 range [0, NUM_CLASSES).
 
         Returns:
-            A scalar int32 tensor with the number of examples (out of batch_size)
+            A scalar int64 tensor with the number of examples (out of batch_size)
             that were predicted correctly.
         '''
         # For a classifier model, we can use the in_top_k Op.
@@ -181,14 +218,15 @@ class CABaseModel(object):
         # the examples where the label is in the top k (here k=1)
         # of all logits for that example.
         with tf.name_scope('prediction'):
-            # correct = tf.nn.in_top_k(logits, labels, k)
-            correct = tf.equal(tf.argmax(logits, 1), tf.argmax(labels, 1))
-            prediction = tf.reduce_mean(tf.cast(correct, tf.float32))
+            # tf.nn.in_top_k does the same thing as equal(argmax)
+            # correct = tf.nn.in_top_k(logits, labels, 1)
+            labels = tf.cast(labels, tf.int64)
+            correct = tf.equal(tf.argmax(logits, 1), labels)
+            # prediction = tf.reduce_mean(tf.cast(correct, tf.float32))
         # Return the number of true entries.
-        return prediction
+        return correct
 
-    @staticmethod
-    def train_inputs():
+    def train_inputs(self):
         '''Distorted input stream for training.'''
         if not FLAGS.data_dir:
             raise ValueError('Please supply a data_dir')
@@ -198,8 +236,7 @@ class CABaseModel(object):
             batch_size=FLAGS.batch_size)
         return inputs, labels
 
-    @staticmethod
-    def inputs(eval_data):
+    def inputs(self, eval_data):
         '''Clean input stream for evaluation and testing.'''
         if not FLAGS.data_dir:
             raise ValueError('Please supply a data_dir')
@@ -313,8 +350,7 @@ class CARNN(CABaseModel):
     
 
 class CAConv(CABaseModel):
-    @staticmethod
-    def inference(inputs):
+    def inference(self, inputs):
         '''Builds inference for the graph.
 
         input size: batch x width x height x depth
@@ -332,43 +368,48 @@ class CAConv(CABaseModel):
 
             dtype = tf.float32
             initializer = tf.truncated_normal_initializer(stddev=0.1, dtype=dtype)
+            # initializer = tf.contrib.layers.xavier_initializer()
             activation = tf.nn.relu
+            # activation = tf.nn.tanh
 
             # Input convolution layer
             with tf.variable_scope('conv1') as scope:
                 # Increase input depth from 1 to state_size
-                kernel = tf.get_variable('weights', shape=[3, 1, 1, FLAGS.state_size], 
+                kernel = tf.get_variable('weights', shape=[3, 3, 1, FLAGS.state_size], 
                                          initializer=initializer, dtype=dtype)
                 biases = tf.get_variable('biases', shape=[FLAGS.state_size], 
                                          initializer=tf.constant_initializer(0.0))
                 conv = tf.nn.conv2d(inputs, kernel, strides=[1, 1, 1, 1], padding='SAME')
                 pre_activation = tf.nn.bias_add(conv, biases)
                 conv1 = activation(pre_activation, name=scope.name)
+                _activation_summary(conv1)
 
             # Cellular Automaton module
             with tf.variable_scope('ca_conv') as scope:
                 # List of all layer states
                 state_layers = [conv1]
                 for layer in range(FLAGS.num_layers):
+                    # Mark variables to be reused within the same name scope
+                    # after layer 0
                     if FLAGS.reuse and layer > 0:
-                        # Mark variables to be reused within the same name scope
-                        # after layer 0
                         scope.reuse_variables()
+
                     # layer input is state_size to state_size
-                    kernel = tf.get_variable('weights', shape=[3, 1, FLAGS.state_size, FLAGS.state_size], 
+                    kernel = tf.get_variable('weights', shape=[3, 3, FLAGS.state_size, FLAGS.state_size], 
                                              initializer=initializer, dtype=dtype)
                     biases = tf.get_variable('biases', shape=[FLAGS.state_size], 
                                              initializer=tf.constant_initializer(0.0))
                     # Previous layer as input
                     conv = tf.nn.conv2d(state_layers[-1], kernel, strides=[1, 1, 1, 1], padding='SAME')
                     pre_activation = tf.nn.bias_add(conv, biases)
-                    conv_state = activation(pre_activation, name=scope.name)
+                    conv_state = activation(pre_activation, name=scope.name + '_%s' % str(layer))
                     state_layers.append(conv_state)
+                    _activation_summary(conv_state)
 
             # Output module
             with tf.variable_scope('output_conv'):
                 # reduce depth from state_size to 1
-                kernel = tf.get_variable('weights', shape=[3, 1, FLAGS.state_size, 1], 
+                kernel = tf.get_variable('weights', shape=[3, 3, FLAGS.state_size, 1], 
                                          initializer=tf.truncated_normal_initializer(
                                              stddev=1.0 / tf.square(float(FLAGS.state_size)), 
                                              dtype=dtype), 
@@ -377,15 +418,21 @@ class CAConv(CABaseModel):
                 conv = tf.nn.conv2d(conv_state, kernel, strides=[1, 1, 1, 1], padding='SAME')
                 pre_activation = tf.nn.bias_add(conv, biases)
                 output = activation(pre_activation, name=scope.name)
+                _activation_summary(output)
 
             # Flatten output layer for classification
-            # tf.sparse_softmax_cross_entropy_with_logits loss function applies softmax internally
+            # Note: 
+            #   tf.sparse_softmax_cross_entropy_with_logits loss function applies softmax internally
             with tf.variable_scope('softmax_linear'):
-                # flatten to one dim
+                # flatten to one dimension
                 reshape = tf.reshape(output, [FLAGS.batch_size, -1])
-                softmax_w = tf.get_variable('softmax_w', shape=[9, FLAGS.num_classes])
+                # input_width = INPUTS_SHAPE[0]
+                # input_height, INPUTS_SHAPE[1]
+                softmax_w = tf.get_variable('softmax_w', shape=[INPUTS_SHAPE[0] * INPUTS_SHAPE[1], FLAGS.num_classes], 
+                    initializer=tf.truncated_normal_initializer(stddev=0.0))
                 softmax_b = tf.get_variable('softmax_b', shape=[FLAGS.num_classes])
                 softmax_linear = tf.nn.xw_plus_b(reshape, softmax_w, softmax_b)
                 logits = softmax_linear
+                _activation_summary(softmax_linear)
 
             return logits

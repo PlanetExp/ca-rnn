@@ -22,7 +22,7 @@ tf.app.flags.DEFINE_string('checkpoint_dir', 'tmp/train',
                            """Directory where to read model checkpoints.""")
 tf.app.flags.DEFINE_integer('eval_interval_secs', 60 * 5,
                             """How often to run the eval.""")
-tf.app.flags.DEFINE_integer('num_examples', 10000,
+tf.app.flags.DEFINE_integer('num_examples', 1000,
                             """Number of examples to run.""")
 tf.app.flags.DEFINE_boolean('run_once', True,
                          """Whether to run eval only once.""")
@@ -32,12 +32,16 @@ def eval_once(saver, summary_writer, eval_op, summary_op, *args):
     '''
 
     '''
+    # l = tf.cast(args[1], tf.int64)
+    # pred2 = tf.equal(tf.argmax(args[2], 1), l)
+
     with tf.Session() as sess:
         ckpt = tf.train.get_checkpoint_state(FLAGS.checkpoint_dir)
         if ckpt and ckpt.model_checkpoint_path:
             saver.restore(sess, ckpt.model_checkpoint_path)
 
-            global_step = ckpt.model_checkpoint_path.split('/')[-1].split('-')[-1]  # ?
+            # take global_step from the checkpoint file path
+            global_step = ckpt.model_checkpoint_path.split('/')[-1].split('-')[-1]
         else:
             print ('No checkpoint file found')
             return
@@ -54,15 +58,19 @@ def eval_once(saver, summary_writer, eval_op, summary_op, *args):
             total_sample_count = num_iter * FLAGS.batch_size
             step = 0
             while step < num_iter and not coord.should_stop():
-                data, label, predictions = sess.run([args[0], args[1], eval_op])
+                predictions = sess.run(eval_op)
+                # label, board, preds, log = sess.run([args[1], args[0], pred2, args[2]])
                 
                 true_count += np.sum(predictions)
                 step += 1
+            # print('logits\n', log[0:5])
+            # print('true count: ', true_count)
+            # print('total sample count: ', total_sample_count)
+            # print('preds ', preds[0:5], '\nanswers:', label[0:5])
+            # print('for boards:\n', board[0:5, :, 0, 0])
+            # print('prediction mean: ', predictions)
 
-            print(eval_op.eval())
-            print(data[0, :], label[0], predictions)
             # Compute precision @ 1.
-            print('%s out of %d predictions are true' % (true_count, total_sample_count))
             precision = true_count / total_sample_count
             print('%s: precision @ 1 = %.3f' % (datetime.now(), precision))
 
@@ -91,12 +99,13 @@ def evaluate():
     logits = mdl.inference(boards)
 
     # Calculate predictions.
-    eval_op = mdl.prediction(logits, labels, 1)
+    eval_op = mdl.prediction(logits, labels)
 
     # Restore the moving average version of the learned variables for eval.
-    variable_averages = tf.train.ExponentialMovingAverage(0.9999)
-    variables_to_restore = variable_averages.variables_to_restore()
-    saver = tf.train.Saver(variables_to_restore)
+    # variable_averages = tf.train.ExponentialMovingAverage(0.9999)
+    # variables_to_restore = variable_averages.variables_to_restore()
+    # saver = tf.train.Saver(variables_to_restore)
+    saver = tf.train.Saver()
 
     # Build the summary operation based on the TF collection of Summaries.
     summary_op = tf.summary.merge_all()
@@ -104,7 +113,7 @@ def evaluate():
     summary_writer = tf.summary.FileWriter(FLAGS.eval_dir, g)
 
     while True:
-        eval_once(saver, summary_writer, eval_op, summary_op, *[boards, labels])
+        eval_once(saver, summary_writer, eval_op, summary_op, *[boards, labels, logits])
         if FLAGS.run_once:
             break
         time.sleep(FLAGS.eval_interval_secs)

@@ -83,7 +83,9 @@ def board_generator(
     fail_count = 0
     while True:
         # Generate boards with random distribution of stones
-        board = np.random.choice(k_value, size=[shape[0], shape[1], shape[2]], p=[1 - stone_probability, stone_probability])
+        board = np.random.choice(k_value, 
+                                 size=[shape[0], shape[1], shape[2]],
+                                 p=[1 - stone_probability, stone_probability])
 
         connection_length = get_connection_length(board)
 
@@ -112,19 +114,34 @@ def generate_constrained_dataset(
         # verbose=False):
         filepath,
         progress_fn=None,
+        shape=None,
         num_examples=None,
-        size=None):
+        shuffle=True,
+        stone_probability=0.5):
+    '''
+    Generates a constrained dataset of 50/50 positive and negative examples
+        and converts them to a .tfrecords file on the disk where filepath
+        is specified.
 
-    width = size[0]
-    height = size[1]
-    depth = size[2]
+    Args:
+        filepath: path to file to be written
+        progress_fn: progress logger hook (unused)
+        shape: shape of the data to be written
+        num_examples: number of examples to generate, half of which will be positive
+        shuffle: whether or not to shuffle this dataset before writing to file (True)
+        stone_probability: probability distribution of 'black' stones on the generated boards
+    '''
+
+    width = shape[0]
+    height = shape[1]
+    depth = shape[2]
 
     # theoretical_max_length = int(height * width / 2 + width / 2)
-    inputs = np.empty((num_examples, width, height, depth), np.int)  # boards
-    labels = np.empty((num_examples, ), np.int)  # connection length
+    inputs = np.empty((num_examples, width, height, depth), np.int8)  # boards
+    labels = np.empty((num_examples, ), np.int8)  # connection length
 
-    pos_board_generator = board_generator(size, 1, 1)
-    neg_board_generator = board_generator(size, 0, 0)
+    pos_board_generator = board_generator(shape, 1, 1, stone_probability=stone_probability)
+    neg_board_generator = board_generator(shape, 0, 0, stone_probability=stone_probability)
 
     num_pos_examples = num_examples // 2
 
@@ -140,78 +157,63 @@ def generate_constrained_dataset(
 
     # ad-hoc shuffling
     # NOTE: creates copies
-    perm = np.random.permutation(len(inputs))
-    inputs = inputs[perm]
-    labels = labels[perm]
+    if shuffle:
+        perm = np.random.permutation(len(inputs))
+        inputs = inputs[perm]
+        labels = labels[perm]
 
     # save to file
-    convert_to_tfrecords(inputs, labels, filepath)
+    _convert_to_tfrecords(inputs, shape, labels, filepath)
 
 
-def _bytes_feature(value):
-    return tf.train.Feature(bytes_list=tf.train.BytesList(value=[value]))
+def _bytes_feature(values):
+    '''Helper function to generate an tf.train.Feature protobuf'''
+    if not isinstance(values, (tuple, list)):
+        values = [values]
+    return tf.train.Feature(bytes_list=tf.train.BytesList(value=values))
 
 
-def _int64_feature(value):
-    return tf.train.Feature(int64_list=tf.train.Int64List(value=[value]))
+def _int64_feature(values):
+    '''Helper function to generate an tf.train.Feature protobuf'''
+    if not isinstance(values, (tuple, list)):
+        values = [values]
+    return tf.train.Feature(int64_list=tf.train.Int64List(value=values))
 
 
-def convert_to_tfrecords(x, y, filepath):
+def _data_to_tfexample(encoded_image, height, width, class_id):
+    '''Helper function to generate an tf.train.Example protobuf'''
+    return tf.train.Example(features=tf.train.Features(
+        feature={
+            'image/encoded': _bytes_feature(encoded_image)
+            # 'image/class/label': _int64_feature(class_id),
+            # 'image/height': _int64_feature(height),
+            # 'image/uint8image': _int64_feature(uint8image)
+        }))
+
+
+def _convert_to_tfrecords(inputs, shape, labels, filepath):
+    '''Helper function to write tfrecords file
+
+    Args:
+        inpupts:
+        shape:
+        labels:
+        filepath:
+    '''
     print('Writing', filepath)
     writer = tf.python_io.TFRecordWriter(filepath)
     
-    for i in range(len(x)):
-        features = x[i].tobytes()
-        label = int(y[i])
-        
-        # Example proto
-        example = tf.train.Example(
-            features=tf.train.Features(
-                feature={
-                    'x': _bytes_feature(features),
-                    'y': _int64_feature(label)
-                }))
+    inputs = inputs.astype(np.int8)
+    labels = labels.astype(np.int8)
+
+    for i in range(len(inputs)):
+        features = inputs[i].tobytes()
+        label = labels[i].tobytes()
+
+        # Encode label byte as part of the record
+        encoded_image = b''.join([label, features])
+
+        example = _data_to_tfexample(encoded_image, shape[0], shape[1], label)
+        # size = example.BytesSize()
         writer.write(example.SerializeToString())
     writer.close()
-
-
-# def build_1d_dataset(
-#         width=8,
-#         depth=1,
-#         n_samples=100,
-#         k_value=2,
-#         train_split=0.8,
-#         valid_split=0.5,
-#         verbose=False):
-    
-#     x = np.random.randint(0, k_value, size=[n_samples, width, depth])
-#     y = np.zeros(n_samples, dtype=int)
-    
-#     # samples, [width, depth]
-#     for i, board in enumerate(x):
-#         # count connection length
-#         connection_length = 0
-#         # width, depth
-#         for j, grid in enumerate(board):
-#             if grid == [1]:
-#                 connection_length += 1
-#             else:
-#                 break
-                
-#         if connection_length == width:
-#             y[i] = 1
-#         else:
-#             y[i] = 0
-# #         y[i] = connection_length
-
-#     dataset = namedtuple('Dataset', ['train', 'valid', 'test'])
-    
-#     # Split dataset
-#     n_train = int(n_samples * train_split)
-#     n_valid = int((n_samples - n_train) * valid_split)
-    
-#     dataset.train = Dataset1d(x[:n_train], y[:n_train])
-#     dataset.valid = Dataset1d(x[:n_valid], y[:n_valid])
-#     dataset.test = Dataset1d(x[:n_valid], y[:n_valid])
-    
-#     return dataset
