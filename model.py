@@ -22,7 +22,7 @@ See: https://www.tensorflow.org/api_docs/python/tf/flags
 '''
 tf.app.flags.DEFINE_integer('batch_size', 128,
                             '''Size of batch.''')
-tf.app.flags.DEFINE_integer('state_size', 32,
+tf.app.flags.DEFINE_integer('state_size', 16,
                             '''Size of cell states.''')
 tf.app.flags.DEFINE_integer('rnn_size', 5,
                             '''Size of rnn.''')
@@ -30,14 +30,14 @@ tf.app.flags.DEFINE_integer('learning_rate', 0.001,
                             '''Learning rate.''')
 tf.app.flags.DEFINE_integer('num_classes', 2,
                             '''Number of label classes.''')
-tf.app.flags.DEFINE_integer('num_layers', 10,
+tf.app.flags.DEFINE_integer('num_layers', 3,
                             '''Number of generations or layers of cellular automaton to generate.''')
 tf.app.flags.DEFINE_string('data_dir', 'tmp/data',
                            '''Path to the data directory.''')
 tf.app.flags.DEFINE_string('cell_name', 'lstm',
                            '''Name of cell to use.''')
 tf.app.flags.DEFINE_boolean('reuse', True,
-                           '''Whether to reuse weight variables or not.''')
+                            '''Whether to reuse weight variables or not.''')
 
 # Global constants
 INPUTS_SHAPE = input_pipeline.INPUTS_SHAPE
@@ -56,18 +56,34 @@ version 0.1
 '''
 
 
+# def _variable_on_cpu(name, shape, initializer):
+#     """Helper to create a Variable stored on CPU memory.
+#     We do this for distributed training in train.py
+
+#     Args:
+#         name: name of the variable
+#         shape: list of ints
+#         initializer: initializer for Variable
+#     Returns:
+#         Variable Tensor
+#     """
+#     with tf.device('/cpu:0'):
+#         var = tf.get_variable(name, shape, initializer=initializer, dtype=tf.float32)
+#     return var
+
+
 def _activation_summary(x):
     """Helper to create summaries for activations.
     Creates a summary that provides a histogram of activations.
     Creates a summary that measures the sparsity of activations.
     Args:
-      x: Tensor
+        x: Tensor
     Returns:
-      nothing
+        nothing
     """
     # Remove 'tower_[0-9]/' from the name in case this is a multi-GPU training
-    # session. This helps the clarity of presentation on tensorboard.
-    tensor_name = re.sub('%s_[0-9]*/' % 'laptop', '', x.op.name)
+    # session. This helps the clarity of presentation on Tensorboard.
+    tensor_name = re.sub('%s_[0-9]*/' % 'tower', '', x.op.name)
     tf.summary.histogram(tensor_name + '/activations', x)
     tf.summary.scalar(tensor_name + '/sparsity',
                       tf.nn.zero_fraction(x))
@@ -79,7 +95,7 @@ def maybe_generate_data():
     if not os.path.exists(dest_dir):
         os.makedirs(dest_dir)
 
-    # Log hook
+    # Log hook to measure progress
     # TODO: not in use
     def _progress(count, block_size, total_size):
         sys.stdout.write('\r>> Generating %s %.1f%%' % (filename,
@@ -121,7 +137,7 @@ def maybe_generate_data():
         print('Successfully generated', filename, statinfo.st_size, 'bytes.')
 
 
-class CABaseModel(object):
+class BaseModelCA(object):
     '''
     CA model base class containing inputs streams and the shared static methods:
         - loss: loss function
@@ -248,96 +264,98 @@ class CABaseModel(object):
         return inputs, labels
 
 
-class CARNN(CABaseModel):
-    '''
-    CA RNN
+class RecurrentCA(BaseModelCA):
+    '''Class implementing Cellular Automaton in Recurrent Neural Network and
+        testing various cell functions.
 
-    LSTM
+        It supports cell selection to try different variations of cells.width
+
+        Currently only supports LSTMCell
+
+        WIP
     '''
-    def inference(inputs):
+    def inference(self, inputs):
+        '''Created inference for graph.
+
+        Args:
+            inputs: of shape [batch x width x height x depth]
+
+        Returns:
+            Logits
+        '''
         with tf.name_scope('inference'):
 
-            # cell selection
+            # Cell selection to try different versions of cells
+            # currently only supports LSTMCell
             additional_cell_args = {}
+            # Standard LSTMCell implementation
+            # which has a split tuple of internal states, one cell state and one hidden state
+            # State comes in the format of LSTMStateTuple NamedTuple which requires some 
+            # special work to unfold.
             if FLAGS.cell_name == 'lstm':
                 cell_fn = tf.contrib.rnn.LSTMCell
-                # additional_cell_args.update({'state_is_tuple': True})
-            elif FLAGS.cell_name == 'grid2lstm':
-                cell_fn = tf.contrib.grid_rnn.Grid2LSTMCell
-                additional_cell_args.update({'tied': True})
-            elif FLAGS.cell_name == 'tf-gridlstm':
-                cell_fn = tf.contrib.rnn.GridLSTMCell
-                additional_cell_args.update({'state_is_tuple': True, 'num_frequency_blocks': [1]})
+            # Vanilla RNN cell 
+            elif FLAGS.cell_name == 'rnn':
+                cell_fn = tf.contrib.rnn.RNNCell
+                # additional_cell_args.update({'tied': True})
             else:
+                # Raise Exception of cell is not supported
                 raise Exception('Unsupported cell_name: {}'.format(FLAGS.cell_name))
 
+            # Create cell from selection with optional additional cell arguments keywords
             cell = cell_fn(FLAGS.state_size, **additional_cell_args)
-            # initial_state = cell.zero_state(self._batch_size, tf.float32)
 
-            # inputs
-            # self._input_data, self._targets = self._input_pipeline()
-            
-            # with tf.device('/cpu:0'):
-            # [batch, width, height, depth]
-            # inputs = tf.reshape(self._input_data, [self._batch_size, self._rnn_size, 1])
-            # inputs = tf.unstack(inputs, axis=1)
-
-            # batch x width x height x depth
-            # perm = [1, 2, 3, 0]
-            # width x height x depth x batch
-            # inputs = tf.transpose(self._input_data, perm)
-
-            # batch x width
+            # Remove all dimensions that are 1 for simplicity
             inputs = tf.squeeze(inputs)
 
-            layers = 10
-
-            '''
-            for g in range(1):
-                for i in range(len(a)):
-                    index = i + 2
-                    n = a[max(0, index - 3):index]
-                    print (n)
-            '''
-
-            # zero_states
+            # Create zero_states and save in LSTMStateTuple object
             c_zero = tf.zeros([FLAGS.batch_size, FLAGS.state_size])
             h_zero = tf.zeros([FLAGS.batch_size, FLAGS.state_size])
             zero_state = tf.contrib.rnn.LSTMStateTuple(c_zero, h_zero)
+            # Create zero states for all unfolded inputs
             states = [zero_state] * FLAGS.rnn_size
 
-            outputs = []
+            
+            # Split inputs into list of single inputs to unfold over
             inputs_as_list = tf.split(inputs, int(inputs.get_shape()[1]), axis=1)
-            reuse = True
-            with tf.variable_scope('lstm_grid') as scope:
-                for l in range(layers):
+            outputs = []
 
+            # Layer unfolding module
+            with tf.variable_scope('lstm_grid') as scope:
+                for l in range(FLAGS.num_layers):
+                    # Unfold cells over inputs
                     for i, input_ in enumerate(inputs_as_list):
-                        if reuse and i > 0:
+                        if FLAGS.reuse and i > 0:
                             scope.reuse_variables()
 
+                        # Create a strided slice to extract neighbours around cell
                         index = i + 2
-                        neigh_states = states[max(0, index - 3): index]  # strided_slice
+                        neigh_states = states[max(0, index - 3): index]
 
-                        # concat neighouring states
+                        # concat neighboring states
                         # c_state = tf.concat([neigh_states[j].c for j in range(len(neigh_states))], 1)
                         # h_state = tf.concat([neigh_states[j].h for j in range(len(neigh_states))], 1)
                         # BUG: state_size grows linerarly per generation
 
-                        # elementwise multiply neighbour states, essentially a conv
+                        # element-wise multiply neighbor states, essentially a conv
+                        # Store result in new LSTMStateTuple object
                         (c_states, h_states) = [list(a) for a in zip(*neigh_states)]
                         c_state = tf.reduce_sum(c_states, 0)
                         h_state = tf.reduce_sum(h_states, 0)
                         state = tf.contrib.rnn.LSTMStateTuple(c_state, h_state)
 
-                        # print (state)
+                        # Get output and new cell state from cell
                         (output, new_state) = cell(input_, state, scope)
+
+                        # Store new state in unfolded state grid
                         states[i] = new_state
 
-                        if l == layers - 1:  # last generation
+                        # If this layer is the last layer, store all outputs in a list
+                        if l == FLAGS.num_layers - 1:  # last generation
                             outputs.append(output)
 
-            # rnn
+            # Output module
+            # Softmax to two classes
             with tf.variable_scope('rnn'):
                 # V matrices
                 softmax_w = tf.get_variable('softmax_w', [FLAGS.rnn_size * FLAGS.state_size, FLAGS.num_classes])
@@ -349,14 +367,13 @@ class CARNN(CABaseModel):
         return logits
     
 
-class CAConv(CABaseModel):
+class ConvolutionalCA(BaseModelCA):
     def inference(self, inputs):
         '''Builds inference for the graph.
 
-        input size: batch x width x height x depth
-
         Args:
-            inputs: inputs returned from train_inputs() or inputs()
+            inputs: inputs returned from train_inputs() or inputs() of size
+                [batch x width x height x depth]
 
         Returns:
             logits
@@ -375,13 +392,14 @@ class CAConv(CABaseModel):
             # Input convolution layer
             with tf.variable_scope('conv1') as scope:
                 # Increase input depth from 1 to state_size
-                kernel = tf.get_variable('weights', shape=[3, 3, 1, FLAGS.state_size], 
+                kernel = tf.get_variable('weights', [3, 3, 1, FLAGS.state_size],
                                          initializer=initializer, dtype=dtype)
-                biases = tf.get_variable('biases', shape=[FLAGS.state_size], 
+                biases = tf.get_variable('biases', [FLAGS.state_size],
                                          initializer=tf.constant_initializer(0.0))
                 conv = tf.nn.conv2d(inputs, kernel, strides=[1, 1, 1, 1], padding='SAME')
                 pre_activation = tf.nn.bias_add(conv, biases)
                 conv1 = activation(pre_activation, name=scope.name)
+                # add activation summary to visualize activations in Tensorboard
                 _activation_summary(conv1)
 
             # Cellular Automaton module
@@ -395,10 +413,10 @@ class CAConv(CABaseModel):
                         scope.reuse_variables()
 
                     # layer input is state_size to state_size
-                    kernel = tf.get_variable('weights', shape=[3, 3, FLAGS.state_size, FLAGS.state_size], 
+                    kernel = tf.get_variable('weights', [3, 3, FLAGS.state_size, FLAGS.state_size],
                                              initializer=initializer, dtype=dtype)
-                    biases = tf.get_variable('biases', shape=[FLAGS.state_size], 
-                                             initializer=tf.constant_initializer(0.0))
+                    biases = tf.get_variable('biases', [FLAGS.state_size],
+                                             initializer=tf.constant_initializer(0.1))
                     # Previous layer as input
                     conv = tf.nn.conv2d(state_layers[-1], kernel, strides=[1, 1, 1, 1], padding='SAME')
                     pre_activation = tf.nn.bias_add(conv, biases)
@@ -409,28 +427,29 @@ class CAConv(CABaseModel):
             # Output module
             with tf.variable_scope('output_conv'):
                 # reduce depth from state_size to 1
-                kernel = tf.get_variable('weights', shape=[3, 3, FLAGS.state_size, 1], 
+                kernel = tf.get_variable('weights', [3, 3, FLAGS.state_size, 1],
                                          initializer=tf.truncated_normal_initializer(
-                                             stddev=1.0 / tf.square(float(FLAGS.state_size)), 
-                                             dtype=dtype), 
+                                             stddev=1.0 / tf.square(float(FLAGS.state_size)),
+                                             dtype=dtype),
                                          dtype=dtype)
-                biases = tf.get_variable('biases', shape=[1], initializer=tf.constant_initializer(0.0))
+                biases = tf.get_variable('biases', [1], initializer=tf.constant_initializer(0.0))
                 conv = tf.nn.conv2d(conv_state, kernel, strides=[1, 1, 1, 1], padding='SAME')
                 pre_activation = tf.nn.bias_add(conv, biases)
                 output = activation(pre_activation, name=scope.name)
                 _activation_summary(output)
 
             # Flatten output layer for classification
-            # Note: 
+            # Note:
             #   tf.sparse_softmax_cross_entropy_with_logits loss function applies softmax internally
+            #   So no need to do that here.
             with tf.variable_scope('softmax_linear'):
                 # flatten to one dimension
                 reshape = tf.reshape(output, [FLAGS.batch_size, -1])
                 # input_width = INPUTS_SHAPE[0]
                 # input_height, INPUTS_SHAPE[1]
-                softmax_w = tf.get_variable('softmax_w', shape=[INPUTS_SHAPE[0] * INPUTS_SHAPE[1], FLAGS.num_classes], 
-                    initializer=tf.truncated_normal_initializer(stddev=0.0))
-                softmax_b = tf.get_variable('softmax_b', shape=[FLAGS.num_classes])
+                softmax_w = tf.get_variable('weights', [INPUTS_SHAPE[0] * INPUTS_SHAPE[1], FLAGS.num_classes],
+                                            initializer=tf.truncated_normal_initializer(stddev=0.0), dtype=dtype)
+                softmax_b = tf.get_variable('biases', [FLAGS.num_classes], initializer=tf.constant_initializer(0.0))
                 softmax_linear = tf.nn.xw_plus_b(reshape, softmax_w, softmax_b)
                 logits = softmax_linear
                 _activation_summary(softmax_linear)

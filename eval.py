@@ -9,7 +9,7 @@ from datetime import datetime
 import time
 import math
 
-import model
+from model import ConvolutionalCA
 
 
 FLAGS = tf.app.flags.FLAGS
@@ -89,17 +89,19 @@ def evaluate():
 
   with tf.Graph().as_default() as g:
 
-    mdl = model.CAConv()
+    # Select which model to evaluate
+    Model = ConvolutionalCA()
+
     # Get boards and labels
     eval_data = FLAGS.eval_data == 'test'
-    boards, labels = mdl.inputs(eval_data=eval_data)
+    inputs, labels = Model.inputs(eval_data=eval_data)
 
     # Build a Graph that computes the logits predictions from the
     # inference model.
-    logits = mdl.inference(boards)
+    logits = Model.inference(inputs)
 
     # Calculate predictions.
-    eval_op = mdl.prediction(logits, labels)
+    eval_op = Model.prediction(logits, labels)
 
     # Restore the moving average version of the learned variables for eval.
     # variable_averages = tf.train.ExponentialMovingAverage(0.9999)
@@ -113,7 +115,7 @@ def evaluate():
     summary_writer = tf.summary.FileWriter(FLAGS.eval_dir, g)
 
     while True:
-        eval_once(saver, summary_writer, eval_op, summary_op, *[boards, labels, logits])
+        eval_once(saver, summary_writer, eval_op, summary_op, *[inputs, labels, logits])
         if FLAGS.run_once:
             break
         time.sleep(FLAGS.eval_interval_secs)

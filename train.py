@@ -5,6 +5,9 @@ import time
 
 import model
 
+from model import ConvolutionalCA
+from model import RecurrentCA
+
 
 FLAGS = tf.app.flags.FLAGS
 '''Global flags interface for command line arguments
@@ -31,7 +34,7 @@ tf.app.flags.DEFINE_integer('log_frequency', 100,
                             '''How often to log results to the console.''')
 
 
-def run_training():
+def run_distributed_training():
     '''
     version 0.1
         + added model selector
@@ -41,29 +44,22 @@ def run_training():
         + switched from argparse to tf.app.flags in order to share flags between files (tf magic)
     '''
     with tf.Graph().as_default():
-        global_step = tf.contrib.framework.get_or_create_global_step()
 
         # Select which model class to train.
         if FLAGS.model_name == 'conv':
-            model_fn = model.CAConv
+            model_fn = ConvolutionalCA
         elif FLAGS.model_name == 'rnn':
-            model_fn = model.CARNN
+            model_fn = RecurrentCA
         else:
             raise Exception('Unsupported model_name: {}'.format(FLAGS.model_name))
-        mdl = model_fn()
+        Model = model_fn()
 
-        # Get training inputs
-        boards, labels = mdl.train_inputs()
-
-        # Build Graph that computes logits predictions from inference
-        logits = mdl.inference(boards)
-
-        # Calculate loss from loss function
-        loss = mdl.loss(logits, labels)
-
-        # Build Graph that trains the model one batch at the time
-        # and update parameters
-        train_op = mdl.optimizer(loss, global_step)
+        # Build model
+        global_step = tf.contrib.framework.get_or_create_global_step()
+        inputs, labels = Model.train_inputs()
+        logits = Model.inference(inputs)
+        loss = Model.loss(logits, labels)
+        train_op = Model.optimizer(loss, global_step)
 
         class _LoggerHook(tf.train.SessionRunHook):
             '''Hook that logs loss and runtime.'''
@@ -95,25 +91,79 @@ def run_training():
                     print (format_str % (datetime.now(), self._step, loss_value,
                                examples_per_sec, sec_per_batch))
 
-        # Start a monitored training session that runs above hook function at every step
-        # and manages queue runners and checkpoints automatically.
-        # See: 
+        # Start a monitored training session to enable asynchronous training and evaluation
+        # See: https://www.tensorflow.org/versions/r1.1/deploy/distributed
 
-        # debug = 1
-        with tf.train.MonitoredTrainingSession(
-            checkpoint_dir=FLAGS.train_dir,
-            hooks=[tf.train.StopAtStepHook(last_step=FLAGS.max_steps),
-                   tf.train.NanTensorHook(loss),
-                   _LoggerHook()],
-            config=tf.ConfigProto(
-                log_device_placement=FLAGS.log_device_placement)) as mon_sess:
+        # The StopAtStepHook handles stopping after running given steps.
+        # NanTensorHook handles stopping if loss ever happens to be NaN
+        # and _loggerHook is our custom logger above
+        hooks = [tf.train.StopAtStepHook(last_step=FLAGS.max_steps),
+                 tf.train.NanTensorHook(loss),
+                 _LoggerHook()]
+        config = tf.ConfigProto(log_device_placement=FLAGS.log_device_placement)
+
+        with tf.train.MonitoredTrainingSession(is_chief=True,
+                                               checkpoint_dir=FLAGS.train_dir,
+                                               hooks=hooks,
+                                               config=config) as mon_sess:
             while not mon_sess.should_stop():
-                # if debug % 100 == 0:
-                    # log, preds, corr = mon_sess.run([logits, pred_op, correct])
-                    # print('logits\n', log[0:5], 'pred:', preds, 'corr:\n', corr[0:5])
-                # debug += 1
 
+                # Run a training step asynchronously.
+                # See `tf.train.SyncReplicasOptimizer` for additional details on how to
+                # perform *synchronous* training.
+                # mon_sess.run handles AbortedError in case of preempted PS.
                 mon_sess.run(train_op)
+
+
+def run_training():
+    Model = ConvolutionalCA()
+
+    # Build model
+    global_step = tf.contrib.framework.get_or_create_global_step()
+    inputs, labels = Model.train_inputs()
+    logits = Model.inference(inputs)
+    loss = Model.loss(logits, labels)
+    train_op = Model.optimizer(loss, global_step)
+    init_op = tf.global_variables_initializer()
+
+
+    with tf.Session() as sess:
+        sess.run(init_op)
+
+    # Start a number of parallel input queue threads to feed data
+    coord = tf.train.Coordinator()
+    threads = tf.train.start_queue_runners(sess=sess, coord=coord)
+
+    step = 0
+    try:
+        start_time = time.time()
+        while not coord.should_stop():
+
+            _, loss_value = sess.run([train_op, loss])
+
+            if FLAGS.max_steps == step:
+                coord.request_stop()
+
+            if step % FLAGS.log_frequency == 0:
+                current_time = time.time()
+                duration = current_time - start_time
+                start_time = current_time
+
+                examples_per_sec = FLAGS.log_frequency * FLAGS.batch_size / duration
+                sec_per_batch = float(duration / FLAGS.log_frequency)
+
+                format_str = ('%s: step %d, loss = %.4f (%.1f examples/sec; %.3f '
+                    'sec/batch)')
+                print (format_str % (datetime.now(), step, loss_value,
+                           examples_per_sec, sec_per_batch))
+
+            step += 1
+
+    except Exception as e:
+        coord.request_stop(e)
+    finally:
+        coord.request_stop()
+        coord.join(threads)
 
 
 def main(argv=None):
@@ -123,7 +173,8 @@ def main(argv=None):
     if tf.gfile.Exists(FLAGS.train_dir):
         tf.gfile.DeleteRecursively(FLAGS.train_dir)
     tf.gfile.MakeDirs(FLAGS.train_dir)
-    run_training()
+    run_distributed_training()
+    # run_training()
 
 
 if __name__ == '__main__':
