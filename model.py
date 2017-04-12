@@ -89,54 +89,6 @@ def _activation_summary(x):
                       tf.nn.zero_fraction(x))
 
 
-def maybe_generate_data():
-    '''Generate testing and training data if none exists in data_dir'''
-    dest_dir = os.path.join(FLAGS.data_dir, 'batches-bin')
-    if not os.path.exists(dest_dir):
-        os.makedirs(dest_dir)
-
-    # Log hook to measure progress
-    # TODO: not in use
-    def _progress(count, block_size, total_size):
-        sys.stdout.write('\r>> Generating %s %.1f%%' % (filename,
-            float(count * block_size) / float(total_size) * 100.0))
-        sys.stdout.flush()
-
-    # generate training batches
-    # constrained
-    num_files = 2
-    stone_probability = 0.45
-    filenames = ['data_batch_%d.tfrecords' % i for i in range(1, num_files + 1)]
-
-    for filename in filenames:
-        filepath = os.path.join(dest_dir, filename)
-        if not os.path.exists(filepath):
-            print('%s not found - generating...' % filename)
-            utils.generate_constrained_dataset(filepath, _progress, **{
-                'num_examples': NUM_EXAMPLES,
-                'stone_probability': stone_probability,
-                'shape': INPUTS_SHAPE})
-            print()
-            statinfo = os.stat(filepath)
-            print('Successfully generated', filename, statinfo.st_size, 'bytes.')
-
-    # generate testing batches
-    # random
-    # TODO
-    filename = 'test_batch.tfrecords'
-    filepath = os.path.join(dest_dir, filename)
-    if not os.path.exists(filepath):
-        print('%s not found - generating...' % filename)
-        # utils.generate_dataset(filepath, _progress, **{
-        utils.generate_constrained_dataset(filepath, _progress, **{
-            'num_examples': NUM_EXAMPLES,
-            'stone_probability': stone_probability,
-            'shape': INPUTS_SHAPE})
-        print()
-        statinfo = os.stat(filepath)
-        print('Successfully generated', filename, statinfo.st_size, 'bytes.')
-
-
 class BaseModelCA(object):
     '''
     CA model base class containing inputs streams and the shared static methods:
@@ -395,7 +347,7 @@ class ConvolutionalCA(BaseModelCA):
                 kernel = tf.get_variable('weights', [3, 3, 1, FLAGS.state_size],
                                          initializer=initializer, dtype=dtype)
                 biases = tf.get_variable('biases', [FLAGS.state_size],
-                                         initializer=tf.constant_initializer(0.0))
+                                         initializer=tf.constant_initializer(0.1))
                 conv = tf.nn.conv2d(inputs, kernel, strides=[1, 1, 1, 1], padding='SAME')
                 pre_activation = tf.nn.bias_add(conv, biases)
                 conv1 = activation(pre_activation, name=scope.name)
@@ -429,10 +381,10 @@ class ConvolutionalCA(BaseModelCA):
                 # reduce depth from state_size to 1
                 kernel = tf.get_variable('weights', [3, 3, FLAGS.state_size, 1],
                                          initializer=tf.truncated_normal_initializer(
-                                             stddev=1.0 / tf.square(float(FLAGS.state_size)),
+                                             stddev=1.0,
                                              dtype=dtype),
                                          dtype=dtype)
-                biases = tf.get_variable('biases', [1], initializer=tf.constant_initializer(0.0))
+                biases = tf.get_variable('biases', [1], initializer=tf.constant_initializer(0.1))
                 conv = tf.nn.conv2d(conv_state, kernel, strides=[1, 1, 1, 1], padding='SAME')
                 pre_activation = tf.nn.bias_add(conv, biases)
                 output = activation(pre_activation, name=scope.name)
@@ -448,8 +400,8 @@ class ConvolutionalCA(BaseModelCA):
                 # input_width = INPUTS_SHAPE[0]
                 # input_height, INPUTS_SHAPE[1]
                 softmax_w = tf.get_variable('weights', [INPUTS_SHAPE[0] * INPUTS_SHAPE[1], FLAGS.num_classes],
-                                            initializer=tf.truncated_normal_initializer(stddev=0.0), dtype=dtype)
-                softmax_b = tf.get_variable('biases', [FLAGS.num_classes], initializer=tf.constant_initializer(0.0))
+                                            initializer=tf.truncated_normal_initializer(stddev=0.3), dtype=dtype)
+                softmax_b = tf.get_variable('biases', [FLAGS.num_classes], initializer=tf.constant_initializer(0.1))
                 softmax_linear = tf.nn.xw_plus_b(reshape, softmax_w, softmax_b)
                 logits = softmax_linear
                 _activation_summary(softmax_linear)

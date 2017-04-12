@@ -90,7 +90,7 @@ def _generate_batch(features, labels, min_queue_examples, batch_size, scope=None
 def train_inputs(data_dir, batch_size):
     # Name scope inputs to beautify Tensorboard graph
     with tf.name_scope('train_inputs') as scope:
-        filenames = [os.path.join(data_dir, 'data_batch_%d.tfrecords' % i)
+        filenames = [os.path.join(data_dir, 'data_batch_%d.bin' % i)
                      for i in range(1, 2)]
         num_examples_per_epoch = NUM_EXAMPLES_PER_EPOCH_FOR_TRAIN
         for f in filenames:
@@ -119,10 +119,10 @@ def train_inputs(data_dir, batch_size):
 def inputs(data_dir, eval_data, batch_size):
     with tf.name_scope('inputs') as scope:
         if not eval_data:
-            filenames = [os.path.join(data_dir, 'data_batch_%d.tfrecords' % i)
+            filenames = [os.path.join(data_dir, 'data_batch_%d.bin' % i)
                          for i in range(1, 2)]
         else:
-            filenames = [os.path.join(data_dir, 'test_batch.tfrecords')]
+            filenames = [os.path.join(data_dir, 'test_batch.bin')]
         num_examples_per_epoch = NUM_EXAMPLES_PER_EPOCH_FOR_TRAIN
         for f in filenames:
             if not tf.gfile.Exists(f):

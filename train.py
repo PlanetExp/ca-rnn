@@ -3,10 +3,8 @@ import tensorflow as tf
 from datetime import datetime
 import time
 
-import model
-
-from model import ConvolutionalCA
-from model import RecurrentCA
+from utils import input_pipeline, maybe_generate_data
+from model import ConvolutionalCA, RecurrentCA
 
 
 FLAGS = tf.app.flags.FLAGS
@@ -167,7 +165,8 @@ def run_training():
 
 
 def main(argv=None):
-    model.maybe_generate_data()
+    maybe_generate_data(FLAGS.data_dir, shape=(9, 9, 1),
+                        num_examples=10000)
     # flush train_dir
     # remove this to start training where train_op previously left off
     if tf.gfile.Exists(FLAGS.train_dir):

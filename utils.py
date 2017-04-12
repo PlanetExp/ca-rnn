@@ -6,11 +6,10 @@ Created 6 mars 2017
 import numpy as np
 import tensorflow as tf
 
-from collections import namedtuple
-from dataset1d import Dataset1d
-
 import sys
 import os
+
+NUM_EXAMPLES = 10000
 
 
 def get_connection_length(board, start_set=None, target_set=None):
@@ -112,7 +111,6 @@ def generate_constrained_dataset(
         # stone_probability=0.5,
         # k_value=2,
         # verbose=False):
-        filepath,
         progress_fn=None,
         shape=None,
         num_examples=None,
@@ -163,7 +161,8 @@ def generate_constrained_dataset(
         labels = labels[perm]
 
     # save to file
-    _convert_to_tfrecords(inputs, shape, labels, filepath)
+    # _convert_to_tfrecords(inputs, shape, labels, filepath)
+    return inputs, labels
 
 
 def _bytes_feature(values):
@@ -200,7 +199,7 @@ def _convert_to_tfrecords(inputs, shape, labels, filepath):
         labels:
         filepath:
     '''
-    print('Writing', filepath)
+    # print('Writing', filepath)
     writer = tf.python_io.TFRecordWriter(filepath)
     
     inputs = inputs.astype(np.int8)
@@ -217,3 +216,150 @@ def _convert_to_tfrecords(inputs, shape, labels, filepath):
         # size = example.BytesSize()
         writer.write(example.SerializeToString())
     writer.close()
+
+
+# Define record file reader
+def read_and_decode(filename_queue, shape=None):
+    """Read and decode "tfrecord" binary files
+
+    Args:
+        filename_queue: a queue of filenames generated from
+            tf.train.string_input_producer
+        shape: shape of input [width x height x depth]
+
+    Returns:
+        example: a training example
+        label: its corresponding label
+    """
+    label_bytes = 1
+    width = shape[0]
+    height = shape[1]
+    depth = shape[2]
+    record_byte_length = label_bytes + width * height
+    
+    with tf.name_scope("read_and_decode"):
+        # Length of record bytes in the dataset
+        # Defined in utils module
+        reader = tf.TFRecordReader()
+        key, record_string = reader.read(filename_queue)
+
+        feature_map = {
+            "image/encoded": tf.FixedLenFeature(
+                shape=[], dtype=tf.string)
+        }
+        parsed = tf.parse_single_example(record_string, feature_map)
+        record_bytes = tf.decode_raw(parsed["image/encoded"], tf.int8)
+
+        # first byte is the label
+        label = tf.cast(tf.strided_slice(record_bytes,
+                                         begin=[0],
+                                         end=[label_bytes]), tf.int32)
+        # label = tf.reshape(label, [1])
+        # print(label)
+
+        # remaining bytes is the example
+        example = tf.reshape(tf.strided_slice(record_bytes,
+                             begin=[label_bytes],
+                             end=[record_byte_length]), [width, height, depth])
+        example = tf.cast(example, tf.float32)
+        example.set_shape([width, height, depth])
+        label.set_shape(1)
+        label = tf.squeeze(label)
+        # print(label)
+        # label = tf.reshape(label, [0])
+
+    return example, label
+# Test reader
+#
+
+
+# Create input pipeline from reader
+def input_pipeline(data_dir, batch_size, shape=None, num_threads=1, train=True):
+    with tf.name_scope("input_pipeline_batches"):
+        data_dir = os.path.join(data_dir, "batches-bin")
+        if train:
+            filenames = [os.path.join(data_dir, "data_batch_%d.bin" % i)
+                    for i in range(1, 2)]
+        else:
+            filenames = [os.path.join(data_dir, "test_batch.bin")]
+
+        for f in filenames:
+            if not tf.gfile.Exists(f):
+                raise ValueError("Failed to find file: " + f)
+
+        filename_queue = tf.train.string_input_producer(filenames)
+        examples, labels = read_and_decode(filename_queue, shape)
+
+        # examples.set_shape([width, height, depth])
+        # labels.set_shape([1])
+        
+        # min_after_dequeue defines how big a buffer we will randomly sample
+        #   from -- bigger means better shuffling but slower start up and more
+        #   memory used.
+        # capacity must be larger than min_after_dequeue and the amount larger
+        #   determines the maximum we will prefetch.  Recommendation:
+        #   min_after_dequeue + (num_threads + a small safety margin) * batch_size
+        min_fraction_of_examples_in_queue = 0.4
+        min_queue_examples = int(NUM_EXAMPLES *
+                                 min_fraction_of_examples_in_queue)
+        example_batch, label_batch = tf.train.shuffle_batch(
+            [examples, labels],
+            batch_size=batch_size,
+            capacity=min_queue_examples + 3 * batch_size,
+            num_threads=num_threads,
+            min_after_dequeue=min_queue_examples)
+
+    # label_batch = tf.reshape(label_batch, [batch_size])
+    return example_batch, label_batch
+
+
+def maybe_generate_data(data_dir, 
+                        shape=None,
+                        num_examples=None,
+                        stone_probability=0.45,
+                        num_files=2):
+    """Generate testing and training data if none exists in data_dir"""
+    dest_dir = os.path.join(data_dir, "batches-bin")
+    if not os.path.exists(dest_dir):
+        os.makedirs(dest_dir)
+
+    # Log hook to measure progress
+    # TODO: not in use
+    def _progress(count, block_size, total_size):
+        sys.stdout.write("\r>> Generating %s %.1f%%" % (filename,
+            float(count * block_size) / float(total_size) * 100.0))
+        sys.stdout.flush()
+
+    # generate training batches
+    # constrained
+    filenames = ["data_batch_%d.bin" % i for i in range(1, num_files + 1)]
+
+    for filename in filenames:
+        filepath = os.path.join(dest_dir, filename)
+        if not os.path.exists(filepath):
+            print("%s not found - generating..." % filename)
+            x, y = generate_constrained_dataset(_progress, **{
+                "num_examples": num_examples or NUM_EXAMPLES,
+                "stone_probability": stone_probability,
+                "shape": shape})
+            _convert_to_tfrecords(x, shape, y, filepath)
+            print()
+            statinfo = os.stat(filepath)
+            print("Successfully generated", filename, statinfo.st_size, "bytes.")
+
+    # generate testing batches
+    # random
+    # TODO: generate random dataset
+    filename = "test_batch.bin"
+    filepath = os.path.join(dest_dir, filename)
+    if not os.path.exists(filepath):
+        print("%s not found - generating..." % filename)
+        # utils.generate_dataset(filepath, _progress, **{
+        x, y = generate_constrained_dataset(_progress, **{
+            "num_examples": num_examples or NUM_EXAMPLES,
+            "stone_probability": stone_probability,
+            "shape": shape})
+        _convert_to_tfrecords(x, shape, y, filepath)
+        print()
+        statinfo = os.stat(filepath)
+        print("Successfully generated", filename, statinfo.st_size, "bytes.")
