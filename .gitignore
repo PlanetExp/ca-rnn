@@ -94,5 +94,6 @@ ENV/
 .DS_Store
 sublime/
 
-# Experiment specific
+# Project specific
 tmp/
+venv2/
