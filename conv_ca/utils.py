@@ -269,8 +269,6 @@ def read_and_decode(filename_queue, shape=None):
         # label = tf.reshape(label, [0])
 
     return example, label
-# Test reader
-#
 
 
 # Create input pipeline from reader
@@ -282,6 +280,7 @@ def input_pipeline(data_dir, batch_size, shape=None, num_threads=1, train=True):
                     for i in range(1, 2)]
         else:
             filenames = [os.path.join(data_dir, "test_batch.bin")]
+            print ("loading testbatch")
 
         for f in filenames:
             if not tf.gfile.Exists(f):
@@ -313,7 +312,7 @@ def input_pipeline(data_dir, batch_size, shape=None, num_threads=1, train=True):
     return example_batch, label_batch
 
 
-def maybe_generate_data(data_dir, 
+def maybe_generate_data(data_dir,
                         shape=None,
                         num_examples=None,
                         stone_probability=0.45,

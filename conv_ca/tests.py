@@ -10,52 +10,53 @@ from conv_ca import ConvCA
 
 class InputTests(tf.test.TestCase):
 
-    def testCkpts(self):
-        path = os.path.join(self.get_temp_dir(), "train.ckpt")
-        a = tf.constant([1])
-        b = tf.constant([1])
-        c = tf.Variable(a + b)
-        init = tf.global_variables_initializer()
-        saver = tf.train.Saver()
-        with self.test_session() as sess:
-            sess.run(init)
-            for i in range(10):
-                cc = sess.run(c)
-                if i % 5 == 0:
-                    s = saver.save(sess, path, i)
-                    print ("saved in ", s, i)
-            print ("var: ", cc)
+    # def testCkpts(self):
+    #   """Testing saving and loading of checkoints"""
+    #     path = os.path.join(self.get_temp_dir(), "train.ckpt")
+    #     a = tf.constant([1])
+    #     b = tf.constant([1])
+    #     c = tf.Variable(a + b)
+    #     init = tf.global_variables_initializer()
+    #     saver = tf.train.Saver()
+    #     with self.test_session() as sess:
+    #         sess.run(init)
+    #         for i in range(10):
+    #             cc = sess.run(c)
+    #             if i % 5 == 0:
+    #                 s = saver.save(sess, path, i)
+    #                 print ("saved in ", s, i)
+    #         print ("var: ", cc)
 
-            # ckpt_path = tf.train.latest_checkpoint(self.get_temp_dir())
-            ckpt = tf.train.get_checkpoint_state(self.get_temp_dir())
-            # tf.train.get_checkpoint_path()
-            print (ckpt.model_checkpoint_path)
-            # print (ckpt.get_checkpoint_path)
-            if ckpt and ckpt.model_checkpoint_path:
-                saver.restore(sess, ckpt.model_checkpoint_path)
-                print("Model restored from ", ckpt.model_checkpoint_path)
-                step = ckpt.model_checkpoint_path.split('/')[-1].split('-')[-1]
-            print (step)
-
+    #         # ckpt_path = tf.train.latest_checkpoint(self.get_temp_dir())
+    #         ckpt = tf.train.get_checkpoint_state(self.get_temp_dir())
+    #         # tf.train.get_checkpoint_path()
+    #         print (ckpt.model_checkpoint_path)
+    #         # print (ckpt.get_checkpoint_path)
+    #         if ckpt and ckpt.model_checkpoint_path:
+    #             saver.restore(sess, ckpt.model_checkpoint_path)
+    #             print("Model restored from ", ckpt.model_checkpoint_path)
+    #             step = ckpt.model_checkpoint_path.split('/')[-1].split('-')[-1]
+    #         print (step)
 
     # def testTemplateNames(self):
+    # """Testing template names"""
     #     def var_name(x, name):
     #         a = tf.get_variable(name,
     #                             shape=[2, 2],
     #                             initializer=tf.constant_initializer(1))
     #         return a
 
-    #     with tf.name_scope("bar"):
-    #         var_name_foo = tf.make_template("var_name_foo", var_name, name="foo")
-    #         a = var_name_foo(tf.constant([1]))
-    #     with tf.name_scope("bar"):
-    #         b = var_name_foo(tf.constant([0]))
+
+    #     var_name_foo = tf.make_template("foo", var_name, name='foo')
+    #     a = var_name_foo(tf.constant([1]))
+    #     var_name_bar = tf.make_template("bar", var_name, name='foo')
+    #     b = var_name_bar(tf.constant([0]))
 
     #     print (a, b)
-        # with self.test_session() as sess:
-        #     sess.run(tf.global_variables_initializer())
-        #     aaa, bbb = sess.run([a, bb])
-        #     self.assertAllEqual(aaa, bbb)
+    #     with self.test_session() as sess:
+    #         sess.run(tf.global_variables_initializer())
+    #         aaa, bbb = sess.run([a, b])
+    #         self.assertAllEqual(aaa, bbb)
 
     # def testScope(self):
     #     def s(name=None):

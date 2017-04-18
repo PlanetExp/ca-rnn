@@ -47,13 +47,13 @@ class FLAGS(object):
     pass
 
 # Parameters
-FLAGS.state_size = 16
+FLAGS.state_size = 32
 FLAGS.batch_size = 64
 # Number of examples to generate in the training set.
 FLAGS.num_examples = 10000
 FLAGS.num_classes = 2
 # Set number of Cellular Automaton layers to stack.
-FLAGS.num_layers = 12
+FLAGS.num_layers = 4
 # Set whether to reuse variables between CA layers or not.
 FLAGS.reuse = True
 FLAGS.learning_rate = 0.01
@@ -84,19 +84,35 @@ class ConvCA(object):
         self._global_step = global_step
         self._keep_prob = keep_prob
 
-    def __call__(self, inputs, labels):
+    def __call__(self, inputs, labels, is_train=True):
         """Creates inference logits and sets up a graph
 
         Args:
             inputs: inputs of shape [batch, width, height, depth]
             labels: labels of shape [batch]
+            is_train: bool, if true also construct loss and optimizer
 
         Returns:
             self: initialized ConvCA object with graph defined
         """
-        # Helper functions
-        # ===============================================
+        self._logits = self._create_inference(inputs)
+        self._prediction = self._create_prediction(self._logits, labels)
 
+        if is_train:
+            self._loss = self._create_loss(self._logits, labels)
+            self._optimizer = self._create_optimizer(self._loss)
+
+        return self  # return complete graph on function call
+
+    def _create_inference(self, inputs):
+        """Construct computational graph.
+
+        Args:
+            inputs: inputs of shape [batch, width, height, depth]
+
+        Returns:
+            logits
+        """
         def _add_summaries(w, b, act):
             """Helper to add summaries"""
             tf.summary.histogram("weights", w)
@@ -121,16 +137,13 @@ class ConvCA(object):
                 _add_summaries(w, b, act)
             return act
 
-        # Inference
-        # ===============================================
-
         # Input convolution layer
-        # -------------------------------------
+        # -----------------------
         # Increase input depth from 1 to state_size
         conv1 = conv_layer(inputs, [3, 3, 1, FLAGS.state_size], name="input_conv")
 
         # Cellular Automaton module
-        # -------------------------------------
+        # -------------------------
         with tf.variable_scope("ca_conv") as scope:
             # List of all layer states
             state_layers = [conv1]
@@ -145,7 +158,7 @@ class ConvCA(object):
                 state_layers.append(conv_state)
 
         # Output module
-        # -------------------------------------
+        # -------------
         # reduce depth from state_size to 1
         initializer = tf.truncated_normal_initializer(
             stddev=1.0 / math.sqrt(float(FLAGS.state_size)), dtype=tf.float32)
@@ -156,7 +169,7 @@ class ConvCA(object):
         dropout = tf.nn.dropout(output, self._keep_prob)
 
         # Softmax linear
-        # -------------------------------------
+        # --------------
         # Flatten output layer for classification
         with tf.variable_scope("softmax_linear"):
             # flatten to one dimension
@@ -170,40 +183,35 @@ class ConvCA(object):
                 initializer=tf.constant_initializer(0.0))
             softmax_linear = tf.nn.xw_plus_b(reshape, w, b)
             _add_summaries(w, b, softmax_linear)
-        self._logits = softmax_linear
+        return softmax_linear
 
-        # Rest of graph
-        # ========================================
-
+    def _create_loss(self, logits, labels):
         # Create loss function
         with tf.name_scope("loss"):
             # Get rid of extra label dimension to [batch_size] and cast to int32
             cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(
-                logits=self._logits, labels=labels, name="cross_entropy")
+                logits=logits, labels=labels, name="cross_entropy")
             cross_entropy_mean = tf.reduce_mean(cross_entropy)
 
             tf.summary.scalar("loss", cross_entropy_mean)
-        self._loss = cross_entropy_mean
+        return cross_entropy_mean
 
+    def _create_optimizer(self, loss):
         # Create training optimizer
         with tf.name_scope("optimizer"):
-            # optimizer = tf.train.AdamOptimizer(FLAGS.learning_rate)
-            optimizer = tf.train.GradientDescentOptimizer(FLAGS.learning_rate)
-            minimize = optimizer.minimize(self._loss, global_step=self._global_step)
-        self._optimizer = minimize
+            optimizer = tf.train.AdamOptimizer(FLAGS.learning_rate, beta1=0.9, beta2=0.999, epsilon=1.0)
+            # optimizer = tf.train.GradientDescentOptimizer(FLAGS.learning_rate)
+            minimize = optimizer.minimize(loss, global_step=self._global_step)
+        return minimize
 
+    def _create_prediction(self, logits, labels):
         with tf.name_scope("prediction"):
-            correct = tf.equal(tf.argmax(self._logits, 1), tf.cast(labels, tf.int64))
+            correct = tf.equal(tf.argmax(logits, 1), tf.cast(labels, tf.int64))
             # correct = tf.nn.in_top_k(self._logits, self._labels, 1)
             accuracy = tf.reduce_mean(tf.cast(correct, tf.float32))
             # print (correct)
             tf.summary.scalar("accuracy", accuracy)
-        self._prediction = accuracy
-
-        return self  # return complete graph on function call
-
-        # End of graph
-        # =================================================
+        return accuracy
 
     # Read-only properties
     # --------------------
@@ -224,7 +232,7 @@ class ConvCA(object):
         return self._prediction
 
     # End of model
-    # =================================================
+    # ============
 
 
 def run_training(run_path):
@@ -239,10 +247,10 @@ def run_training(run_path):
                                     shape=(width, height, depth),
                                     num_threads=FLAGS.num_threads, train=True)
     inputs_valid, labels_valid = input_pipeline(FLAGS.data_dir, FLAGS.batch_size,
-                                                shape=(width, height, depth), 
+                                                shape=(width, height, depth),
                                                 num_threads=FLAGS.num_threads, train=False)
     # Attach an image summary to Tensorboard
-    tf.summary.image('input', inputs_valid, 3)
+    # tf.summary.image('input', inputs_valid, 3)
 
     # Keep probability for dropout layer
     keep_prob = tf.placeholder(tf.float32, name="keep_prob")
@@ -253,15 +261,15 @@ def run_training(run_path):
     # Create model graph
     # --------------------------------------------------------------
     # Here we create two separate graphs that share the same weights
-    # one for validation and one for train, and feed them separate 
+    # one for validation and one for train, and feed them separate
     # input streams. tf.make_template creates a copy of graph with
     # same variables.
     model = ConvCA(global_step, keep_prob)
     template = tf.make_template("model", model)
     with tf.name_scope("train"):
         train = template(inputs, labels)
-    with tf.name_scope("valid"): 
-        valid = template(inputs_valid, labels_valid)
+    with tf.name_scope("valid"):
+        valid = template(inputs_valid, labels_valid, is_train=False)
 
     # Initialize all variables that are trainable
     init_op = tf.global_variables_initializer()
@@ -302,13 +310,18 @@ def run_training(run_path):
             # Training loop
             # ==============================================================
             # Training loop runs until coordinator have got a requested to stop
+            tot_accuracy = 0.0
+            tot_valid_accuracy = 0.0
             while not coord.should_stop():
                 
                 # Run training
                 # --------------------------------
                 feed_dict = {keep_prob: 1.0}
-                sess_run_args = [train.optimizer, train.loss, train.prediction]
-                _, loss_value, accuracy = sess.run(sess_run_args, feed_dict)
+                sess_run_args = [train.optimizer, train.loss, train.prediction, valid.prediction]
+                _, loss_value, accuracy, valid_accuracy = sess.run(sess_run_args, feed_dict)
+
+                tot_accuracy += accuracy
+                tot_valid_accuracy += valid_accuracy
                 step += 1
 
                 # After run and logging
@@ -334,18 +347,24 @@ def run_training(run_path):
                     duration = current_time - start_time
                     start_time = current_time
 
+                    avg_accuracy        = tot_accuracy          / FLAGS.log_frequency
+                    avg_valid_accuracy  = tot_valid_accuracy    / FLAGS.log_frequency
+                    tot_accuracy        = 0.0
+                    tot_valid_accuracy  = 0.0
+
                     # print validation accuracy for log (this is also saved in Tensorboard)
                     valid_accuracy = sess.run(valid.prediction, feed_dict={keep_prob: 1.0})
                     examples_per_sec = FLAGS.log_frequency * FLAGS.batch_size / duration
                     sec_per_batch = float(duration / FLAGS.log_frequency)
 
-                    format_str = ("%s: step %d, loss = %.4f, accuracy = %.3f (%.3f) "
+                    format_str = ("%s step %d, loss: %.4f, avg. accuracy: %.3f (%.3f) "
                                   "(%.1f examples/sec; %.3f sec/batch)")
-                    print (format_str % (datetime.now(), step, loss_value, accuracy, valid_accuracy,
-                               examples_per_sec, sec_per_batch))
+                    print (format_str % (datetime.now().strftime("%y-%m-%d %H:%M:%S"),
+                                         step, loss_value, avg_accuracy, avg_valid_accuracy,
+                                         examples_per_sec, sec_per_batch))
 
                 if step % 500 == 0:
-                     # Save the model once on a while
+                    # Save the model once on a while
                     saver.save(sess, filename, global_step=step)
 
         except Exception as e:
@@ -353,6 +372,7 @@ def run_training(run_path):
         finally:
             save_path = saver.save(sess, filename, global_step=step)
             print("Model saved in file: %s" % save_path)
+
 
             coord.request_stop()
             # Wait for threads to finish
