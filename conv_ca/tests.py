@@ -7,8 +7,78 @@ import os
 import utils
 from conv_ca import ConvCA
 
+from StringIO import StringIO
+from matplotlib.pyplot import 
+
 
 class InputTests(tf.test.TestCase):
+
+    def testEmbeddings(self):
+        """test projector and word embeddings"""
+
+        slim = tf.contrib.slim
+
+        data = np.random.randint(0, 2, size=(50, 1, 3, 3, 1))
+        labels = np.random.randint(0, 2, size=(50, 1))
+
+        x = tf.placeholder(tf.float32, [None, 3, 3, 1])
+        y = tf.placeholder(tf.int32, [None])
+
+        
+
+        
+
+
+        # net = slim.conv2d(x, 10, [3, 3])
+
+        with tf.variable_scope("conv", initializer=tf.contrib.layers.xavier_initializer()):
+            w = tf.Variable(tf.random_normal([3, 3, 1, 10], stddev=1.0), name="weights")
+            b = tf.Variable(tf.zeros([10]), name="biases")
+            conv = tf.nn.conv2d(x, w, strides=[1, 1, 1, 1], padding="SAME")
+            net = tf.nn.relu(conv + b)
+
+
+        net = slim.conv2d(net, 1, [1, 1])
+        y_ = slim.fully_connected(tf.reshape(net, [1, 9]), 2)
+
+
+
+        loss = slim.losses.sparse_softmax_cross_entropy(y_, y)
+        train_op = tf.train.AdamOptimizer(0.01).minimize(loss)
+        pred = tf.reduce_mean(tf.cast(tf.nn.in_top_k(y_, y, 1), tf.float32))
+
+
+
+        logdir = "tmp/test"
+        path = os.path.join(logdir, "model.ckpt")
+        projector = tf.contrib.tensorboard.plugins.projector
+        config = projector.ProjectorConfig()
+        embedding = config.embeddings.add()
+        embedding.tensor_name = w.name
+        # Link this tensor to its metadata file (e.g. labels).
+        # embedding.metadata_path = os.path.join(logdir, 'metadata.tsv')
+        writer = tf.summary.FileWriter(logdir)
+        projector.visualize_embeddings(writer, config)
+
+        saver = tf.train.Saver()
+
+
+        with self.test_session() as sess:
+            sess.run(tf.global_variables_initializer())
+            step = 0
+            acc = 0
+            for i in range(20):
+                feed_dict={x: data[i], y: labels[i]}
+                sess.run(train_op, feed_dict=feed_dict)
+                acc += sess.run(pred, feed_dict=feed_dict)
+                step += 1
+
+            print (acc / step)
+            s = saver.save(sess, path, step)
+            print ("saved in ", s, i)
+            
+
+
 
     # def testCkpts(self):
     #   """Testing saving and loading of checkoints"""
@@ -46,7 +116,6 @@ class InputTests(tf.test.TestCase):
     #                             initializer=tf.constant_initializer(1))
     #         return a
 
-
     #     var_name_foo = tf.make_template("foo", var_name, name='foo')
     #     a = var_name_foo(tf.constant([1]))
     #     var_name_bar = tf.make_template("bar", var_name, name='foo')
@@ -77,14 +146,14 @@ class InputTests(tf.test.TestCase):
     # def testTemplate(self):
     #     k = tf.placeholder(tf.float32, name="keep_prob")
     #     g = tf.Variable(0, trainable=False, name="global_step")
-    #     m = ConvCA(g, k)
+    #     # m = ConvCA(g, k)
     #     it = tf.placeholder(tf.float32, [64, 9, 9, 1])
     #     iv = tf.placeholder(tf.float32, [64, 9, 9, 1])
     #     il = tf.placeholder(tf.int64, [64, ])
-    #     t = tf.make_template("model", m)
+    #     t = tf.make_template("model", ConvCA)
     #     # model = t(g, k)
-    #     valid = t(iv, il)
-    #     train = t(it, il)
+    #     valid = t(iv, il, g, k)
+    #     train = t(it, il, g, k)
 
     #     data1 = np.ones((64, 9, 9, 1))
     #     data2 = np.zeros((64, 9, 9, 1))
@@ -95,7 +164,6 @@ class InputTests(tf.test.TestCase):
     #         a, b = sess.run([train.prediction, valid.prediction], feed_dict={k: 1.0, it: data1, iv: data2, il: label})
     #         self.assertEqual(train, valid)
     #         self.assertNotEqual(a, b)
-
 
     # def testReader(self):
     #   filepath = os.path.join(self.get_temp_dir(), "test.bin")
@@ -141,7 +209,7 @@ class InputTests(tf.test.TestCase):
     #           self.assertAllEqual(x[i], image)
     #           self.assertAllEqual(y[i], label)
 
-                # Add tests for correct label and image shape sizes
+        # Add tests for correct label and image shape sizes
 
 if __name__ == "__main__":
     tf.test.main()

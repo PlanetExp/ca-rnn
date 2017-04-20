@@ -67,7 +67,7 @@ FLAGS.num_threads = 4
 FLAGS.data_dir = "tmp/data"
 FLAGS.train_dir = "tmp/train"
 FLAGS.valid_dir = "tmp/valid"
-FLAGS.checkpoint_dir = "tmp/train/checkpoints"
+FLAGS.checkpoint_dir = "tmp/train"
 # Whether or not to restore checkpoint of training session.
 # If true, then train for an additional amount of steps in max_steps.
 FLAGS.restore = False
@@ -80,29 +80,23 @@ depth = 1
 
 class ConvCA(object):
     """Defines convolution cellular automaton model"""
-    def __init__(self, global_step, keep_prob):
-        self._global_step = global_step
-        self._keep_prob = keep_prob
-
-    def __call__(self, inputs, labels, is_train=True):
+    def __init__(self, inputs, labels, global_step, keep_prob, is_train=True):
         """Creates inference logits and sets up a graph
 
         Args:
             inputs: inputs of shape [batch, width, height, depth]
             labels: labels of shape [batch]
             is_train: bool, if true also construct loss and optimizer
-
-        Returns:
-            self: initialized ConvCA object with graph defined
         """
+        self._global_step = global_step
+        self._keep_prob = keep_prob
+
         self._logits = self._create_inference(inputs)
         self._prediction = self._create_prediction(self._logits, labels)
 
         if is_train:
             self._loss = self._create_loss(self._logits, labels)
             self._optimizer = self._create_optimizer(self._loss)
-
-        return self  # return complete graph on function call
 
     def _create_inference(self, inputs):
         """Construct computational graph.
@@ -123,8 +117,7 @@ class ConvCA(object):
         def conv_layer(x, kernel,
                        initializer=None, name=None, scope=None):
             """Helper to create convolution layer and add summaries"""
-            initializer = initializer or tf.truncated_normal_initializer(
-                stddev=0.1, dtype=tf.float32)
+            initializer = initializer or tf.contrib.layers.xavier_initializer()
             with tf.variable_scope(scope or name):
                 w = tf.get_variable("weights", kernel,
                                     initializer=initializer, dtype=tf.float32)
@@ -152,9 +145,8 @@ class ConvCA(object):
                 if FLAGS.reuse and layer > 0:
                     scope.reuse_variables()
 
-                conv_state = conv_layer(state_layers[-1],
-                                        [3, 3, FLAGS.state_size, FLAGS.state_size],
-                                        scope=scope)
+                conv_state = conv_layer(
+                    state_layers[-1], [3, 3, FLAGS.state_size, FLAGS.state_size], scope=scope)
                 state_layers.append(conv_state)
 
         # Output module
@@ -166,14 +158,14 @@ class ConvCA(object):
                             initializer=initializer, name="output_conv")
 
         # Add dropout layer
+        # -----------------
         dropout = tf.nn.dropout(output, self._keep_prob)
+
+        flattened = tf.reshape(dropout, [FLAGS.batch_size, -1])
 
         # Softmax linear
         # --------------
-        # Flatten output layer for classification
         with tf.variable_scope("softmax_linear"):
-            # flatten to one dimension
-            reshape = tf.reshape(dropout, [FLAGS.batch_size, -1])
             w = tf.get_variable("weights",
                 [width * height, FLAGS.num_classes],
                 initializer=tf.truncated_normal_initializer(stddev=0.0),
@@ -181,7 +173,14 @@ class ConvCA(object):
             b = tf.get_variable("biases",
                 [FLAGS.num_classes],
                 initializer=tf.constant_initializer(0.0))
-            softmax_linear = tf.nn.xw_plus_b(reshape, w, b)
+            softmax_linear = tf.nn.xw_plus_b(flattened, w, b)
+
+
+            self.embedding_input = flattened
+            self.embedding_size = height * width
+
+
+
             _add_summaries(w, b, softmax_linear)
         return softmax_linear
 
@@ -242,13 +241,6 @@ def run_training(run_path):
         run_path: file path where run data is stored. It is based on
             hyperparameters.
     """
-    # Get train and validation data inputs and labels from pipeline
-    inputs, labels = input_pipeline(FLAGS.data_dir, FLAGS.batch_size,
-                                    shape=(width, height, depth),
-                                    num_threads=FLAGS.num_threads, train=True)
-    inputs_valid, labels_valid = input_pipeline(FLAGS.data_dir, FLAGS.batch_size,
-                                                shape=(width, height, depth),
-                                                num_threads=FLAGS.num_threads, train=False)
     # Attach an image summary to Tensorboard
     # tf.summary.image('input', inputs_valid, 3)
 
@@ -264,134 +256,241 @@ def run_training(run_path):
     # one for validation and one for train, and feed them separate
     # input streams. tf.make_template creates a copy of graph with
     # same variables.
-    model = ConvCA(global_step, keep_prob)
-    template = tf.make_template("model", model)
+    # model = ConvCA(global_step, keep_prob)
+    shared_model = tf.make_template("model", ConvCA)
     with tf.name_scope("train"):
-        train = template(inputs, labels)
+        inputs, labels = input_pipeline(
+            FLAGS.data_dir, FLAGS.batch_size,
+            shape=(width, height, depth),
+            num_threads=FLAGS.num_threads, train=True)
+        train = shared_model(inputs, labels, global_step, keep_prob)
     with tf.name_scope("valid"):
-        valid = template(inputs_valid, labels_valid, is_train=False)
+        inputs_valid, labels_valid = input_pipeline(
+            FLAGS.data_dir, FLAGS.batch_size,
+            shape=(width, height, depth),
+            num_threads=FLAGS.num_threads, train=False)
+        valid = shared_model(inputs_valid, labels_valid, global_step, keep_prob)
 
     # Initialize all variables that are trainable
     init_op = tf.global_variables_initializer()
     # Create op to merge all summaries into one for writing to disk
     merged_summary = tf.summary.merge_all()
 
+
+
+
+
     # Start Tensorflow session
-    with tf.Session() as sess:
-        sess.run(init_op)
+    sess = tf.Session()
 
-        # Create writer to write summaries to file
-        writer = tf.summary.FileWriter(run_path)
-        writer.add_graph(sess.graph)
 
-        # Create coordinator and start all threads from input_pipeline
-        # The queue will feed our model with data, so no placeholders are necessary
-        coord = tf.train.Coordinator()
+    embedding = tf.Variable(tf.zeros([FLAGS.batch_size, train.embedding_size]), name="embedding")
+    assignment = embedding.assign(train.embedding_input)
+
+
+    # Save checkpoints for evaluations
+    saver = tf.train.Saver(max_to_keep=1)
+    filename = os.path.join(run_path, "train.ckpt")
+
+    sess.run(init_op)
+
+    # Create writer to write summaries to file
+    writer = tf.summary.FileWriter(run_path)
+    writer.add_graph(sess.graph)
+
+    config = tf.contrib.tensorboard.plugins.projector.ProjectorConfig()
+    embedding_config = config.embeddings.add()
+    embedding_config.tensor_name = embedding.name
+    print(embedding.name)
+    # Link this tensor to its metadata file (e.g. labels).
+    # embedding.metadata_path = os.path.join(FLAGS.checkpoint_dir, 'metadata.tsv')
+    tf.contrib.tensorboard.plugins.projector.visualize_embeddings(writer, config)
+
+
+
+
+    # Create coordinator and start all threads from input_pipeline
+    # The queue will feed our model with data, so no placeholders are necessary
+    coord = tf.train.Coordinator()
+    
+
+
+    step = 0
+    start_time = time()
+    try:
         threads = tf.train.start_queue_runners(sess=sess, coord=coord)
-       
-        # Save checkpoints for evaluations
-        saver = tf.train.Saver(max_to_keep=1)
-        filename = os.path.join(FLAGS.checkpoint_dir, "train.ckpt")
 
-        # Restore model if checkpoint exists
-        step = 0
-        ckpt = tf.train.get_checkpoint_state(FLAGS.checkpoint_dir)
-        if FLAGS.restore and ckpt and ckpt.model_checkpoint_path:
-            saver.restore(sess, ckpt.model_checkpoint_path)
-            print("Model restored from ", ckpt.model_checkpoint_path)
-            # Take steps from the file path
-            step = int(ckpt.model_checkpoint_path.split('/')[-1].split('-')[-1])
-            FLAGS.max_steps = FLAGS.max_steps + step
-        else:
-            tf.gfile.MakeDirs(FLAGS.checkpoint_dir)
+        # Training loop
+        # ==============================================================
+        # Training loop runs until coordinator have got a requested to stop
+        tot_accuracy = 0.0
+        tot_valid_accuracy = 0.0
+        while not coord.should_stop():
+            
+            # Run training
+            # --------------------------------
+            feed_dict = {keep_prob: 1.0}
+            sess_run_args = [train.optimizer, train.loss, train.prediction, valid.prediction]
+            _, loss_value, accuracy, valid_accuracy = sess.run(sess_run_args, feed_dict)
 
-        start_time = time()
-        try:
-            # Training loop
-            # ==============================================================
-            # Training loop runs until coordinator have got a requested to stop
-            tot_accuracy = 0.0
-            tot_valid_accuracy = 0.0
-            while not coord.should_stop():
+            tot_accuracy += accuracy
+            tot_valid_accuracy += valid_accuracy
+            step += 1
+
+            # After run and logging
+            # --------------------------------
+            # Take a snapshot of graph stats every 500th step and merge summary
+            # and debug images. Merge summaries every 10th step.
+            if step % 10 == 0:
+                summary = sess.run(merged_summary, feed_dict)
+                writer.add_summary(summary, step)
+            elif step % 500 == 499:
+                run_options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
+                run_metadata = tf.RunMetadata()
+                summary = sess.run(merged_summary, feed_dict, run_options, run_metadata)
+                writer.add_run_metadata(run_metadata, "step%d" % step)
+                writer.add_summary(summary, step)
+
+            # Request to close threads and stop at max_steps
+            if FLAGS.max_steps == step:
+                coord.request_stop()
+
+            if step % FLAGS.log_frequency == 0:
+                current_time = time()
+                duration = current_time - start_time
+                start_time = current_time
+
+                avg_accuracy        = tot_accuracy          / FLAGS.log_frequency
+                avg_valid_accuracy  = tot_valid_accuracy    / FLAGS.log_frequency
+                tot_accuracy        = 0.0
+                tot_valid_accuracy  = 0.0
+
+
+
+
+                # print validation accuracy for log (this is also saved in Tensorboard)
+                valid_accuracy = sess.run(valid.prediction, feed_dict={keep_prob: 1.0})
+                examples_per_sec = FLAGS.log_frequency * FLAGS.batch_size / duration
+                sec_per_batch = float(duration / FLAGS.log_frequency)
+
+                format_str = ("%s step %d, loss: %.4f, avg. accuracy: %.5f (%.5f) "
+                              "(%.1f examples/sec; %.3f sec/batch)")
+                print (format_str % (datetime.now().strftime("%y-%m-%d %H:%M:%S"),
+                                     step, loss_value, avg_accuracy, avg_valid_accuracy,
+                                     examples_per_sec, sec_per_batch))
+
+            if step % 500 == 0:
                 
-                # Run training
-                # --------------------------------
-                feed_dict = {keep_prob: 1.0}
-                sess_run_args = [train.optimizer, train.loss, train.prediction, valid.prediction]
-                _, loss_value, accuracy, valid_accuracy = sess.run(sess_run_args, feed_dict)
 
+                sess.run(assignment, feed_dict=feed_dict)
+
+
+
+
+                # Save the model once on a while
+                saver.save(sess, filename, global_step=step)
+
+
+
+
+
+
+
+
+
+
+    except Exception as e:
+        coord.request_stop(e)
+    finally:
+        save_path = saver.save(sess, filename, global_step=step)
+        print("Model saved in file: %s" % save_path)
+
+
+        coord.request_stop()
+        # Wait for threads to finish
+        coord.join(threads)
+    # Close file writer neatly
+    writer.close()
+
+    sess.close()
+
+
+
+
+
+
+
+def eval_once(valid, feed_dict):
+
+
+
+
+    saver = tf.train.Saver()
+
+
+
+    with tf.Session() as sess:
+
+        # Restore model parameters form checkpoint
+        checkpoint = tf.train.get_checkpoint_state(FLAGS.checkpoint_dir)
+        if checkpoint and checkpoint.model_checkpoint_path:
+            saver.restore(sess, checkpoint.model_checkpoint_path)
+            print("Model restored from ", checkpoint.model_checkpoint_path)
+        #     # Take steps from the file path
+            global_step = int(checkpoint.model_checkpoint_path.split('/')[-1].split('-')[-1])
+        #     FLAGS.max_steps = FLAGS.max_steps + step
+        else:
+            print ("no checkpoint file found.")
+            return
+
+
+        # number of steps to evaluate for
+        num_steps = 1000
+
+
+        coord = tf.train.Coordinator()
+        try:
+            # Extend current queue runner threads to feed evaluation data into the validation graph
+            threads = []
+            for queue_runner in tf.get_collection(tf.GraphKeys.QUEUE_RUNNERS):
+                threads.extend(queue_runner.create_threads(sess, coord=coord, daemon=True, start=True))
+
+
+            num_iterations = int(math.ceil(num_steps / FLAGS.batch_size))
+            step = 0
+            tot_accuracy = 0
+            while step < num_iterations and not coord.should_stop():
+                accuracy = sess.run(valid.prediction, feed_dict=feed_dict)
                 tot_accuracy += accuracy
-                tot_valid_accuracy += valid_accuracy
                 step += 1
 
-                # After run and logging
-                # --------------------------------
-                # Take a snapshot of graph stats every 500th step and merge summary
-                # and debug images. Merge summaries every 10th step.
-                if step % 10 == 0:
-                    summary = sess.run(merged_summary, feed_dict)
-                    writer.add_summary(summary, step)
-                elif step % 500 == 499:
-                    run_options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
-                    run_metadata = tf.RunMetadata()
-                    summary = sess.run(merged_summary, feed_dict, run_options, run_metadata)
-                    writer.add_run_metadata(run_metadata, "step%d" % step)
-                    writer.add_summary(summary, step)
+            avg_accuracy = tot_accuracy / num_iterations
+            print ("validation accuracy: ", avg_accuracy)
 
-                # Request to close threads and stop at max_steps
-                if FLAGS.max_steps == step:
-                    coord.request_stop()
 
-                if step % FLAGS.log_frequency == 0:
-                    current_time = time()
-                    duration = current_time - start_time
-                    start_time = current_time
-
-                    avg_accuracy        = tot_accuracy          / FLAGS.log_frequency
-                    avg_valid_accuracy  = tot_valid_accuracy    / FLAGS.log_frequency
-                    tot_accuracy        = 0.0
-                    tot_valid_accuracy  = 0.0
-
-                    # print validation accuracy for log (this is also saved in Tensorboard)
-                    valid_accuracy = sess.run(valid.prediction, feed_dict={keep_prob: 1.0})
-                    examples_per_sec = FLAGS.log_frequency * FLAGS.batch_size / duration
-                    sec_per_batch = float(duration / FLAGS.log_frequency)
-
-                    format_str = ("%s step %d, loss: %.4f, avg. accuracy: %.3f (%.3f) "
-                                  "(%.1f examples/sec; %.3f sec/batch)")
-                    print (format_str % (datetime.now().strftime("%y-%m-%d %H:%M:%S"),
-                                         step, loss_value, avg_accuracy, avg_valid_accuracy,
-                                         examples_per_sec, sec_per_batch))
-
-                if step % 500 == 0:
-                    # Save the model once on a while
-                    saver.save(sess, filename, global_step=step)
 
         except Exception as e:
             coord.request_stop(e)
         finally:
-            save_path = saver.save(sess, filename, global_step=step)
-            print("Model saved in file: %s" % save_path)
-
-
             coord.request_stop()
-            # Wait for threads to finish
             coord.join(threads)
-        # Close file writer neatly
-        writer.close()
 
+
+def make_hparam_str(learning_rate, num_layers, state_size):
+    """Construct hyperparameter string for our run based on settings
+    Example: "lr=1e-2,ca=3,state=64
+    """
+    return "lr=%.0e,ca=%d,state=%d" % (learning_rate, num_layers, state_size)
 
 def main(argv=None):
     # Generate dataset of (shape) if none exists in data_dir already
     maybe_generate_data(FLAGS.data_dir, shape=(width, height, depth),
                         num_examples=FLAGS.num_examples)
 
-    # Construct hyperparameter string for our run based on settings
-    # (Example: "lr=1e-2,ca=3,state=64")
-    hparam_str = "lr=%.e,ca=%d,state=%d" % (FLAGS.learning_rate,
-                                            FLAGS.num_layers,
-                                            FLAGS.state_size)
-    run_path = os.path.join(FLAGS.train_dir, hparam_str)
+    hparam = make_hparam_str(FLAGS.learning_rate, FLAGS.num_layers, FLAGS.state_size)
+    run_path = os.path.join(FLAGS.train_dir, hparam)
+
+    print ("Starting run for %s" % hparam)
 
     # Flush run_path for convenience
     if tf.gfile.Exists(run_path):
