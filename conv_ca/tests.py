@@ -5,78 +5,158 @@ import numpy as np
 
 import os
 import utils
-from conv_ca import ConvCA
+import random
+# from conv_ca import ConvCA
 
-from StringIO import StringIO
-from matplotlib.pyplot import 
+# from StringIO import StringIO
 
 
 class InputTests(tf.test.TestCase):
 
-    def testEmbeddings(self):
-        """test projector and word embeddings"""
+    def blobs(self):
+        width = 5
+        height = 5
+        k = 1
 
-        slim = tf.contrib.slim
+        # def index(i, j)
 
-        data = np.random.randint(0, 2, size=(50, 1, 3, 3, 1))
-        labels = np.random.randint(0, 2, size=(50, 1))
+        grid = np.zeros((width * height), dtype=np.uint8)
 
-        x = tf.placeholder(tf.float32, [None, 3, 3, 1])
-        y = tf.placeholder(tf.int32, [None])
+        for i in range(k):
+            r = srandom.randint(len(grid))
+            grid[r] = 1
 
-        
+        print(grid.shape)
+        print("sometext")
 
-        
+        # filled = set()
+
+    # ----------------------------
+    # def testGenerator(self):
+        # utils.save_emdedding_metadata("tmp/data/20x20", (20, 20, 1), 1024)
+
+    # ----------------------------
+
+    # def testPng(self):
+    #     # import struct
+
+    #     def write_png(buf, width, height):
+    #         """ buf: must be bytes or a bytearray in Python3.x,
+    #             a regular string in Python2.x.
+    #         """
+    #         import zlib
+    #         import struct
+
+    #         # reverse the vertical line order and add null bytes at the start
+    #         width_byte_4 = width * 4
+    #         raw_data = b''.join(b'\x00' + buf[span:span + width_byte_4]
+    #                             for span in range((height - 1) * width_byte_4, -1, - width_byte_4))
+
+    #         def png_pack(png_tag, data):
+    #             chunk_head = png_tag + data
+    #             return (struct.pack("!I", len(data)) +
+    #                     chunk_head +
+    #                     struct.pack("!I", 0xFFFFFFFF & zlib.crc32(chunk_head)))
+
+    #         return b''.join([
+    #             b'\x89PNG\r\n\x1a\n',
+    #             png_pack(b'IHDR', struct.pack("!2I5B", width, height, 8, 6, 0, 0, 0)),
+    #             png_pack(b'IDAT', zlib.compress(raw_data, 9)),
+    #             png_pack(b'IEND', b'')])
 
 
-        # net = slim.conv2d(x, 10, [3, 3])
+    #     def saveAsPNG(array, filename):
+    #         import struct
+    #         if any([len(row) != len(array[0]) for row in array]):
+    #             raise ValueError ("Array should have elements of equal size")
 
-        with tf.variable_scope("conv", initializer=tf.contrib.layers.xavier_initializer()):
-            w = tf.Variable(tf.random_normal([3, 3, 1, 10], stddev=1.0), name="weights")
-            b = tf.Variable(tf.zeros([10]), name="biases")
-            conv = tf.nn.conv2d(x, w, strides=[1, 1, 1, 1], padding="SAME")
-            net = tf.nn.relu(conv + b)
-
-
-        net = slim.conv2d(net, 1, [1, 1])
-        y_ = slim.fully_connected(tf.reshape(net, [1, 9]), 2)
-
-
-
-        loss = slim.losses.sparse_softmax_cross_entropy(y_, y)
-        train_op = tf.train.AdamOptimizer(0.01).minimize(loss)
-        pred = tf.reduce_mean(tf.cast(tf.nn.in_top_k(y_, y, 1), tf.float32))
-
-
-
-        logdir = "tmp/test"
-        path = os.path.join(logdir, "model.ckpt")
-        projector = tf.contrib.tensorboard.plugins.projector
-        config = projector.ProjectorConfig()
-        embedding = config.embeddings.add()
-        embedding.tensor_name = w.name
-        # Link this tensor to its metadata file (e.g. labels).
-        # embedding.metadata_path = os.path.join(logdir, 'metadata.tsv')
-        writer = tf.summary.FileWriter(logdir)
-        projector.visualize_embeddings(writer, config)
-
-        saver = tf.train.Saver()
-
-
-        with self.test_session() as sess:
-            sess.run(tf.global_variables_initializer())
-            step = 0
-            acc = 0
-            for i in range(20):
-                feed_dict={x: data[i], y: labels[i]}
-                sess.run(train_op, feed_dict=feed_dict)
-                acc += sess.run(pred, feed_dict=feed_dict)
-                step += 1
-
-            print (acc / step)
-            s = saver.save(sess, path, step)
-            print ("saved in ", s, i)
+    #         #First row becomes top row of image.
+    #         flat = []
+    #         map(flat.extend, reversed(array))
             
+    #         #Big-endian, unsigned 32-byte integer.
+    #         buf = b''.join([struct.pack('>I', ((0xffFFff & i32)<<8)|(i32>>24) )
+    #                         for i32 in flat])   #Rotate from ARGB to RGBA.
+
+    #         data = write_png(buf, len(array[0]), len(array))
+    #         with open(filename, 'wb') as f:
+    #             f.write(data)
+
+
+    #     a = np.random.randint(0, 4, [29, 29, 3, 1], np.uint32)
+    #     saveAsPNG(a, "asdf.png")
+
+
+    # ----------------------------
+
+
+
+    # def testEmbeddings(self):
+    #     """test projector and word embeddings"""
+
+    #     slim = tf.contrib.slim
+
+    #     data = np.random.randint(0, 2, size=(50, 1, 3, 3, 1))
+    #     labels = np.random.randint(0, 2, size=(50, 1))
+
+    #     x = tf.placeholder(tf.float32, [None, 3, 3, 1])
+    #     y = tf.placeholder(tf.int32, [None])
+
+        
+    # ----------------------------
+
+        
+
+
+    #     # net = slim.conv2d(x, 10, [3, 3])
+
+    #     with tf.variable_scope("conv", initializer=tf.contrib.layers.xavier_initializer()):
+    #         w = tf.Variable(tf.random_normal([3, 3, 1, 10], stddev=1.0), name="weights")
+    #         b = tf.Variable(tf.zeros([10]), name="biases")
+    #         conv = tf.nn.conv2d(x, w, strides=[1, 1, 1, 1], padding="SAME")
+    #         net = tf.nn.relu(conv + b)
+
+
+    #     net = slim.conv2d(net, 1, [1, 1])
+    #     y_ = slim.fully_connected(tf.reshape(net, [1, 9]), 2)
+
+
+
+    #     loss = slim.losses.sparse_softmax_cross_entropy(y_, y)
+    #     train_op = tf.train.AdamOptimizer(0.01).minimize(loss)
+    #     pred = tf.reduce_mean(tf.cast(tf.nn.in_top_k(y_, y, 1), tf.float32))
+
+
+
+    #     logdir = "tmp/test"
+    #     path = os.path.join(logdir, "model.ckpt")
+    #     projector = tf.contrib.tensorboard.plugins.projector
+    #     config = projector.ProjectorConfig()
+    #     embedding = config.embeddings.add()
+    #     embedding.tensor_name = w.name
+    #     # Link this tensor to its metadata file (e.g. labels).
+    #     # embedding.metadata_path = os.path.join(logdir, 'metadata.tsv')
+    #     writer = tf.summary.FileWriter(logdir)
+    #     projector.visualize_embeddings(writer, config)
+
+    #     saver = tf.train.Saver()
+
+
+    #     with self.test_session() as sess:
+    #         sess.run(tf.global_variables_initializer())
+    #         step = 0
+    #         acc = 0
+    #         for i in range(20):
+    #             feed_dict={x: data[i], y: labels[i]}
+    #             sess.run(train_op, feed_dict=feed_dict)
+    #             acc += sess.run(pred, feed_dict=feed_dict)
+    #             step += 1
+
+    #         print (acc / step)
+    #         s = saver.save(sess, path, step)
+    #         print ("saved in ", s, i)
+            
+    # ----------------------------
 
 
 
@@ -107,6 +187,7 @@ class InputTests(tf.test.TestCase):
     #             print("Model restored from ", ckpt.model_checkpoint_path)
     #             step = ckpt.model_checkpoint_path.split('/')[-1].split('-')[-1]
     #         print (step)
+    # ----------------------------
 
     # def testTemplateNames(self):
     # """Testing template names"""
@@ -126,6 +207,7 @@ class InputTests(tf.test.TestCase):
     #         sess.run(tf.global_variables_initializer())
     #         aaa, bbb = sess.run([a, b])
     #         self.assertAllEqual(aaa, bbb)
+    # ----------------------------
 
     # def testScope(self):
     #     def s(name=None):
@@ -142,6 +224,7 @@ class InputTests(tf.test.TestCase):
     #         sess.run(tf.global_variables_initializer())
     #         aaa, bbb = sess.run([a, bb])
     #         self.assertAllEqual(aaa, bbb)
+    # ----------------------------
 
     # def testTemplate(self):
     #     k = tf.placeholder(tf.float32, name="keep_prob")
@@ -164,6 +247,7 @@ class InputTests(tf.test.TestCase):
     #         a, b = sess.run([train.prediction, valid.prediction], feed_dict={k: 1.0, it: data1, iv: data2, il: label})
     #         self.assertEqual(train, valid)
     #         self.assertNotEqual(a, b)
+    # ----------------------------
 
     # def testReader(self):
     #   filepath = os.path.join(self.get_temp_dir(), "test.bin")
@@ -185,6 +269,7 @@ class InputTests(tf.test.TestCase):
 
     #       self.assertAllEqual(ii, image)
     #       self.assertAllEqual(ll, label)
+    # ----------------------------
 
     # def testGenerator(self):
     #   filepath = os.path.join(self.get_temp_dir(), "test.bin")

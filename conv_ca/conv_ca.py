@@ -32,37 +32,47 @@ Supervisor: Dr. Frederic Maire
 Date: 13/4/17
 """
 import tensorflow as tf
+import numpy as np
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from time import time
 import math
 import os
 # import re
 
-from utils import input_pipeline, maybe_generate_data
+from utils import input_pipeline, maybe_generate_data, embedding_metadata
 
 
 class FLAGS(object):
     """Temporary wrapper class for settings"""
     pass
 
-# Parameters
-FLAGS.state_size = 32
-FLAGS.batch_size = 64
-# Number of examples to generate in the training set.
-FLAGS.num_examples = 10000
-FLAGS.num_classes = 2
+
+# PARAMETERS
+# ----------
 # Set number of Cellular Automaton layers to stack.
-FLAGS.num_layers = 4
+FLAGS.num_layers = 20
+FLAGS.state_size = 2
+FLAGS.batch_size = 32
+# Number of examples to generate in the training set.
+FLAGS.num_examples = 1024
+# Number of files to split the training set into
+FLAGS.num_files = 2
+FLAGS.num_classes = 2
 # Set whether to reuse variables between CA layers or not.
 FLAGS.reuse = True
-FLAGS.learning_rate = 0.01
+FLAGS.learning_rate = 0.1
 # Number of steps before printing logs.
 FLAGS.log_frequency = 100
 # Set maximum number of steps to train for
 FLAGS.max_steps = 10000
+# Stop after an avg validation accuracy have been reached (e.g we know it
+# can learn)
+FLAGS.max_valid_accuracy = 0.98
+# Set epsilon for Adam optimizer
+FLAGS.epsilon = 1.0
 # Start a number of threads per processor.
-FLAGS.num_threads = 4
+FLAGS.num_threads = 1
 # Set various directories for files.
 FLAGS.data_dir = "tmp/data"
 FLAGS.train_dir = "tmp/train"
@@ -71,69 +81,69 @@ FLAGS.checkpoint_dir = "tmp/train"
 # Whether or not to restore checkpoint of training session.
 # If true, then train for an additional amount of steps in max_steps.
 FLAGS.restore = False
+# Size of grid: tuple of dim (width, height, depth)
+FLAGS.grid_shape = (20, 20, 1)
+# Whether or not to record embeddings for this run
+FLAGS.embedding = True
+# Whether to save image and label data per embedding
+FLAGS.embedding_metadata = False
+FLAGS.num_embeddings = 32
+# Whether to record run metadata (e.g. run times, memory consumption etc.)
+# view these in either Tensorboard or save to json file with a
+# tensorflow.python.client.timeline object and and view a web browser
+FLAGS.run_metadata = False
 
 # Data parameters
-width = 9
-height = 9
-depth = 1
+WIDTH = FLAGS.grid_shape[0]
+HEIGHT = FLAGS.grid_shape[1]
+DEPTH = FLAGS.grid_shape[2]
+PREFIX = str(WIDTH) + "x" + str(HEIGHT)
+DATADIR = os.path.join(FLAGS.data_dir, PREFIX)
+
+
+def _add_summaries(w, b, act):
+    """Helper to add summaries"""
+    tf.summary.histogram("weights", w)
+    tf.summary.histogram("biases", b)
+    tf.summary.histogram("activations", act)
+    tf.summary.scalar("sparsity", tf.nn.zero_fraction(act))
+
+
+def conv_layer(x, kernel,
+               initializer=None, name=None, scope=None):
+    """Helper to create convolution layer and add summaries"""
+    initializer = initializer or tf.contrib.layers.xavier_initializer()
+    with tf.variable_scope(scope or name):
+        w = tf.get_variable("weights", kernel,
+                            initializer=initializer, dtype=tf.float32)
+        b = tf.get_variable("biases", [kernel[3]],
+                            initializer=tf.zeros_initializer())
+        conv = tf.nn.conv2d(x, w,
+                            strides=[1, 1, 1, 1],
+                            padding="SAME")
+        act = tf.nn.relu(conv + b)
+        _add_summaries(w, b, act)
+    return act
 
 
 class ConvCA(object):
-    """Defines convolution cellular automaton model"""
-    def __init__(self, inputs, labels, global_step, keep_prob, is_train=True):
-        """Creates inference logits and sets up a graph
+    def __init__(self, inputs, labels, keep_prob, istrain=True):
+        """Creates inference logits and sets up a graph that can be reached
+            through the properties inference, loss, optimizer and prediction respectively
 
         Args:
-            inputs: inputs of shape [batch, width, height, depth]
-            labels: labels of shape [batch]
-            is_train: bool, if true also construct loss and optimizer
+            inputs:
+            labels:
+            keep_prob: placeholder for dropout probability
+            istrain: bool whether model is for training or testing, if train
+                create an additional optimizer and loss function
         """
-        self._global_step = global_step
-        self._keep_prob = keep_prob
-
-        self._logits = self._create_inference(inputs)
-        self._prediction = self._create_prediction(self._logits, labels)
-
-        if is_train:
-            self._loss = self._create_loss(self._logits, labels)
-            self._optimizer = self._create_optimizer(self._loss)
-
-    def _create_inference(self, inputs):
-        """Construct computational graph.
-
-        Args:
-            inputs: inputs of shape [batch, width, height, depth]
-
-        Returns:
-            logits
-        """
-        def _add_summaries(w, b, act):
-            """Helper to add summaries"""
-            tf.summary.histogram("weights", w)
-            tf.summary.histogram("biases", b)
-            tf.summary.histogram("activations", act)
-            tf.summary.scalar("sparsity", tf.nn.zero_fraction(act))
-
-        def conv_layer(x, kernel,
-                       initializer=None, name=None, scope=None):
-            """Helper to create convolution layer and add summaries"""
-            initializer = initializer or tf.contrib.layers.xavier_initializer()
-            with tf.variable_scope(scope or name):
-                w = tf.get_variable("weights", kernel,
-                                    initializer=initializer, dtype=tf.float32)
-                b = tf.get_variable("biases", [kernel[3]],
-                                    initializer=tf.constant_initializer(0.0))
-                conv = tf.nn.conv2d(x, w,
-                                    strides=[1, 1, 1, 1],
-                                    padding="SAME")
-                act = tf.nn.relu(conv + b)
-                _add_summaries(w, b, act)
-            return act
 
         # Input convolution layer
         # -----------------------
         # Increase input depth from 1 to state_size
-        conv1 = conv_layer(inputs, [3, 3, 1, FLAGS.state_size], name="input_conv")
+        conv1 = conv_layer(
+            inputs, [3, 3, 1, FLAGS.state_size], name="input_conv")
 
         # Cellular Automaton module
         # -------------------------
@@ -144,6 +154,19 @@ class ConvCA(object):
                 # Share weights between layers by marking scope with reuse
                 if FLAGS.reuse and layer > 0:
                     scope.reuse_variables()
+
+                # w = tf.get_variable(
+                #     "weights", [3, 3, FLAGS.state_size, FLAGS.state_size],
+                #     initializer=tf.contrib.layers.xavier_initializer(), dtype=tf.float32)
+                # b = tf.get_variable(
+                #     "biases", [FLAGS.state_size],
+                #     initializer=tf.zeros_initializer())
+                # conv = tf.nn.conv2d(
+                #     state_layers[-1], w, strides=[1, 1, 1, 1], padding="SAME")
+                # conv_state = tf.nn.relu(conv + b)
+
+                # self.embedding_input = tf.reshape(conv_state, [-1, 20 * 20 * 2])
+                # self.embedding_size = 20 * 20 * 2
 
                 conv_state = conv_layer(
                     state_layers[-1], [3, 3, FLAGS.state_size, FLAGS.state_size], scope=scope)
@@ -159,166 +182,134 @@ class ConvCA(object):
 
         # Add dropout layer
         # -----------------
-        dropout = tf.nn.dropout(output, self._keep_prob)
+        dropout = tf.nn.dropout(output, keep_prob)
 
-        flattened = tf.reshape(dropout, [FLAGS.batch_size, -1])
+        flattened = tf.reshape(dropout, [-1, WIDTH * HEIGHT])
 
         # Softmax linear
         # --------------
         with tf.variable_scope("softmax_linear"):
             w = tf.get_variable("weights",
-                [width * height, FLAGS.num_classes],
-                initializer=tf.truncated_normal_initializer(stddev=0.0),
-                dtype=tf.float32)
+                                [WIDTH * HEIGHT, FLAGS.num_classes],
+                                initializer=tf.contrib.layers.xavier_initializer(),
+                                dtype=tf.float32)
             b = tf.get_variable("biases",
-                [FLAGS.num_classes],
-                initializer=tf.constant_initializer(0.0))
-            softmax_linear = tf.nn.xw_plus_b(flattened, w, b)
+                                [FLAGS.num_classes],
+                                initializer=tf.zeros_initializer())
+            logits = tf.nn.xw_plus_b(flattened, w, b)
+            _add_summaries(w, b, logits)
+        self.inference = logits
 
-
-            self.embedding_input = flattened
-            self.embedding_size = height * width
-
-
-
-            _add_summaries(w, b, softmax_linear)
-        return softmax_linear
-
-    def _create_loss(self, logits, labels):
-        # Create loss function
-        with tf.name_scope("loss"):
-            # Get rid of extra label dimension to [batch_size] and cast to int32
-            cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(
-                logits=logits, labels=labels, name="cross_entropy")
-            cross_entropy_mean = tf.reduce_mean(cross_entropy)
-
-            tf.summary.scalar("loss", cross_entropy_mean)
-        return cross_entropy_mean
-
-    def _create_optimizer(self, loss):
-        # Create training optimizer
-        with tf.name_scope("optimizer"):
-            optimizer = tf.train.AdamOptimizer(FLAGS.learning_rate, beta1=0.9, beta2=0.999, epsilon=1.0)
-            # optimizer = tf.train.GradientDescentOptimizer(FLAGS.learning_rate)
-            minimize = optimizer.minimize(loss, global_step=self._global_step)
-        return minimize
-
-    def _create_prediction(self, logits, labels):
         with tf.name_scope("prediction"):
-            correct = tf.equal(tf.argmax(logits, 1), tf.cast(labels, tf.int64))
-            # correct = tf.nn.in_top_k(self._logits, self._labels, 1)
-            accuracy = tf.reduce_mean(tf.cast(correct, tf.float32))
-            # print (correct)
+            correct_prediction = tf.equal(
+                tf.argmax(logits, 1), tf.cast(labels, tf.int64))
+            accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
             tf.summary.scalar("accuracy", accuracy)
-        return accuracy
+        self.prediction = accuracy
 
-    # Read-only properties
-    # --------------------
-    @property
-    def inference(self):
-        return self._logits
+        if istrain:
+            # Unique to train graph
+            # Create loss function
+            with tf.name_scope("loss"):
+                cross_entropy = tf.reduce_mean(
+                    tf.nn.sparse_softmax_cross_entropy_with_logits(
+                        logits=logits, labels=labels, name="cross_entropy"))
+                tf.summary.scalar("loss", cross_entropy)
+            self.loss = cross_entropy
 
-    @property
-    def loss(self):
-        return self._loss
-
-    @property
-    def optimizer(self):
-        return self._optimizer
-
-    @property
-    def prediction(self):
-        return self._prediction
-
-    # End of model
-    # ============
+            # Create training optimizer
+            with tf.name_scope("optimizer"):
+                train_step = tf.train.AdamOptimizer(
+                    FLAGS.learning_rate, beta1=0.9, beta2=0.999, epsilon=FLAGS.epsilon).minimize(
+                        cross_entropy)
+            self.optimizer = train_step
+        else:
+            # Unique to test graph
+            if FLAGS.embedding:
+                self.embedding_input = flattened
+                self.embedding_size = WIDTH * HEIGHT
 
 
-def run_training(run_path):
-    """Run training and validation steps
+def conv_ca_model(run_path):
 
-    Args:
-        run_path: file path where run data is stored. It is based on
-            hyperparameters.
-    """
-    # Attach an image summary to Tensorboard
-    # tf.summary.image('input', inputs_valid, 3)
+    tf.reset_default_graph()
+    sess = tf.Session()
 
-    # Keep probability for dropout layer
-    keep_prob = tf.placeholder(tf.float32, name="keep_prob")
+    # INPUTS
+    # ------
 
-    # Save a global step variable to keep track on steps
-    global_step = tf.Variable(0, trainable=False, name="global_step")
+    with tf.name_scope("inputs"):
+        inputs, labels = input_pipeline(
+            DATADIR, FLAGS.batch_size,
+            shape=FLAGS.grid_shape,
+            num_threads=FLAGS.num_threads, istrain=True, name="train_pipe")
 
-    # Create model graph
-    # --------------------------------------------------------------
-    # Here we create two separate graphs that share the same weights
-    # one for validation and one for train, and feed them separate
-    # input streams. tf.make_template creates a copy of graph with
-    # same variables.
-    # model = ConvCA(global_step, keep_prob)
+        inputs_valid, labels_valid = input_pipeline(
+            DATADIR, FLAGS.batch_size,
+            shape=FLAGS.grid_shape,
+            num_threads=FLAGS.num_threads, istrain=False, name="valid_pipe")
+
+        # Keep probability for dropout layer
+        keep_prob = tf.placeholder(tf.float32, name="keep_prob")
+        inputs_pl = tf.placeholder(
+            tf.float32, shape=[None, WIDTH, HEIGHT, DEPTH], name="inputs")
+        labels_pl = tf.placeholder(tf.int32, shape=[None], name="labels")
+
+    # GRAPH
+    # -----
+
+    # Make a template out of model to create two models that share the same graph
+    # and variables
     shared_model = tf.make_template("model", ConvCA)
     with tf.name_scope("train"):
-        inputs, labels = input_pipeline(
-            FLAGS.data_dir, FLAGS.batch_size,
-            shape=(width, height, depth),
-            num_threads=FLAGS.num_threads, train=True)
-        train = shared_model(inputs, labels, global_step, keep_prob)
+        train = shared_model(inputs_pl, labels_pl, keep_prob)
     with tf.name_scope("valid"):
-        inputs_valid, labels_valid = input_pipeline(
-            FLAGS.data_dir, FLAGS.batch_size,
-            shape=(width, height, depth),
-            num_threads=FLAGS.num_threads, train=False)
-        valid = shared_model(inputs_valid, labels_valid, global_step, keep_prob)
+        valid = shared_model(inputs_pl, labels_pl, keep_prob, istrain=False)
 
-    # Initialize all variables that are trainable
-    init_op = tf.global_variables_initializer()
+    # Create writer to write summaries to file
+    writer = tf.summary.FileWriter(run_path, sess.graph)
+    writer.add_graph(sess.graph)
+
+    # EMBEDDING
+    # ---------
+
+    if FLAGS.embedding:
+        embedding = tf.Variable(tf.zeros([FLAGS.num_embeddings,
+                                          valid.embedding_size]),
+                                name="embedding")
+        assignment = embedding.assign(valid.embedding_input)
+        x_embedding, y_embedding = embedding_metadata(
+            DATADIR, FLAGS.grid_shape, FLAGS.num_embeddings)
+        setup_embedding_projector(embedding, writer)
+
+    # REST OF GRAPH
+    # -------------
+
     # Create op to merge all summaries into one for writing to disk
     merged_summary = tf.summary.merge_all()
 
-
-
-
-
-    # Start Tensorflow session
-    sess = tf.Session()
-
-
-    embedding = tf.Variable(tf.zeros([FLAGS.batch_size, train.embedding_size]), name="embedding")
-    assignment = embedding.assign(train.embedding_input)
-
-
     # Save checkpoints for evaluations
-    saver = tf.train.Saver(max_to_keep=1)
+    saver = tf.train.Saver()
     filename = os.path.join(run_path, "train.ckpt")
 
-    sess.run(init_op)
+    sess.run(tf.global_variables_initializer())
 
-    # Create writer to write summaries to file
-    writer = tf.summary.FileWriter(run_path)
-    writer.add_graph(sess.graph)
-
-    config = tf.contrib.tensorboard.plugins.projector.ProjectorConfig()
-    embedding_config = config.embeddings.add()
-    embedding_config.tensor_name = embedding.name
-    print(embedding.name)
-    # Link this tensor to its metadata file (e.g. labels).
-    # embedding.metadata_path = os.path.join(FLAGS.checkpoint_dir, 'metadata.tsv')
-    tf.contrib.tensorboard.plugins.projector.visualize_embeddings(writer, config)
-
-
-
+    # RUN
+    # ---
 
     # Create coordinator and start all threads from input_pipeline
     # The queue will feed our model with data, so no placeholders are necessary
     coord = tf.train.Coordinator()
-    
-
 
     step = 0
+    epoch = 0
     start_time = time()
+    tot_running_time = start_time
     try:
         threads = tf.train.start_queue_runners(sess=sess, coord=coord)
+
+        # fetch embedding images for t-SNE visualization
+        # x_embedding_batch, y_embedding_batch = sess.run([x_embedding, y_embedding])
 
         # Training loop
         # ==============================================================
@@ -326,12 +317,19 @@ def run_training(run_path):
         tot_accuracy = 0.0
         tot_valid_accuracy = 0.0
         while not coord.should_stop():
-            
+
             # Run training
             # --------------------------------
-            feed_dict = {keep_prob: 1.0}
-            sess_run_args = [train.optimizer, train.loss, train.prediction, valid.prediction]
-            _, loss_value, accuracy, valid_accuracy = sess.run(sess_run_args, feed_dict)
+            x_batch, y_batch = sess.run([inputs, labels])
+            feed_dict = {inputs_pl: x_batch,
+                         labels_pl: y_batch, keep_prob: 0.5}
+            sess_run_args = [train.optimizer, train.loss, train.prediction]
+            _, loss_value, accuracy = sess.run(sess_run_args, feed_dict)
+
+            x_batch, y_batch = sess.run([inputs_valid, labels_valid])
+            feed_dict = {inputs_pl: x_batch,
+                         labels_pl: y_batch, keep_prob: 1.0}
+            valid_accuracy = sess.run(valid.prediction, feed_dict)
 
             tot_accuracy += accuracy
             tot_valid_accuracy += valid_accuracy
@@ -345,11 +343,20 @@ def run_training(run_path):
                 summary = sess.run(merged_summary, feed_dict)
                 writer.add_summary(summary, step)
             elif step % 500 == 499:
-                run_options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
-                run_metadata = tf.RunMetadata()
-                summary = sess.run(merged_summary, feed_dict, run_options, run_metadata)
-                writer.add_run_metadata(run_metadata, "step%d" % step)
-                writer.add_summary(summary, step)
+                if FLAGS.run_metadata:
+                    run_options = tf.RunOptions(
+                        trace_level=tf.RunOptions.FULL_TRACE)
+                    run_metadata = tf.RunMetadata()
+                    summary = sess.run(
+                        merged_summary, feed_dict, run_options, run_metadata)
+                    writer.add_run_metadata(run_metadata, "step%d" % step)
+                    writer.add_summary(summary, step)
+
+                    # Create the Timeline object, and write it to a json
+                    # tl = tf.python.client.timeline.Timeline(run_metadata.step_stats)
+                    # ctf = tl.generate_chrome_trace_format()
+                    # with open("timeline.json", "w") as f:
+                    #     f.write(ctf)
 
             # Request to close threads and stop at max_steps
             if FLAGS.max_steps == step:
@@ -360,44 +367,51 @@ def run_training(run_path):
                 duration = current_time - start_time
                 start_time = current_time
 
-                avg_accuracy        = tot_accuracy          / FLAGS.log_frequency
-                avg_valid_accuracy  = tot_valid_accuracy    / FLAGS.log_frequency
-                tot_accuracy        = 0.0
-                tot_valid_accuracy  = 0.0
+                avg_accuracy = tot_accuracy / FLAGS.log_frequency
+                avg_accuracy_valid = tot_valid_accuracy / FLAGS.log_frequency
+                tot_accuracy = 0.0
+                tot_valid_accuracy = 0.0
 
+                if avg_accuracy_valid > FLAGS.max_valid_accuracy:
+                    coord.request_stop()
 
+                tag = "avg_accuracy/train"
+                value = avg_accuracy
+                s = tf.Summary(
+                    value=[tf.Summary.Value(tag=tag, simple_value=value)])
+                writer.add_summary(s, step)
 
+                tag = "avg_accuracy/valid"
+                value = avg_accuracy_valid
+                s = tf.Summary(
+                    value=[tf.Summary.Value(tag=tag, simple_value=value)])
+                writer.add_summary(s, step)
 
-                # print validation accuracy for log (this is also saved in Tensorboard)
-                valid_accuracy = sess.run(valid.prediction, feed_dict={keep_prob: 1.0})
+                epoch += FLAGS.batch_size * FLAGS.log_frequency / FLAGS.num_examples
                 examples_per_sec = FLAGS.log_frequency * FLAGS.batch_size / duration
                 sec_per_batch = float(duration / FLAGS.log_frequency)
-
-                format_str = ("%s step %d, loss: %.4f, avg. accuracy: %.5f (%.5f) "
-                              "(%.1f examples/sec; %.3f sec/batch)")
-                print (format_str % (datetime.now().strftime("%y-%m-%d %H:%M:%S"),
-                                     step, loss_value, avg_accuracy, avg_valid_accuracy,
+                format_str = ("%s step %d/%d, epoch %.2f, loss: %.4f, avg. accuracy: %.4f (%.4f) "
+                              "(%.1fex/s; %.3fs/batch)")
+                print (format_str % (datetime.now().strftime("%m/%d %H:%M:%S"),
+                                     step, FLAGS.max_steps, epoch, loss_value, avg_accuracy, avg_accuracy_valid,
                                      examples_per_sec, sec_per_batch))
 
+                progress = float(step / FLAGS.max_steps)
+                estimated_duration = (
+                    FLAGS.max_steps * FLAGS.batch_size) * (1 - progress) / examples_per_sec
+                t = timedelta(seconds=int(estimated_duration))
+                format_str = "Estimated duration: %s (%.1f%%)"
+                print (format_str % (str(t), progress * 100))
+
             if step % 500 == 0:
-                
-
-                sess.run(assignment, feed_dict=feed_dict)
-
-
-
+                if FLAGS.embedding:
+                    # Assign embeddings to variable
+                    feed_dict = {inputs_pl: x_embedding,
+                                 labels_pl: y_embedding, keep_prob: 1.0}
+                    sess.run(assignment, feed_dict)
 
                 # Save the model once on a while
                 saver.save(sess, filename, global_step=step)
-
-
-
-
-
-
-
-
-
 
     except Exception as e:
         coord.request_stop(e)
@@ -405,75 +419,42 @@ def run_training(run_path):
         save_path = saver.save(sess, filename, global_step=step)
         print("Model saved in file: %s" % save_path)
 
-
         coord.request_stop()
         # Wait for threads to finish
         coord.join(threads)
-    # Close file writer neatly
-    writer.close()
 
+        # Print some last stats
+        tot_duration = time() - tot_running_time
+        t = timedelta(seconds=int(tot_duration))
+        print ("Total running time: %s" % t)
+
+    writer.close()
     sess.close()
 
 
+def setup_embedding_projector(embedding, writer):
+    """Sets up embedding projector in Tensorboard and links meta-data to
+        a Tensorflow writer, that in turns saves the data to disk in a
+        checkpoint file.
 
-
-
-
-
-def eval_once(valid, feed_dict):
-
-
-
-
-    saver = tf.train.Saver()
-
-
-
-    with tf.Session() as sess:
-
-        # Restore model parameters form checkpoint
-        checkpoint = tf.train.get_checkpoint_state(FLAGS.checkpoint_dir)
-        if checkpoint and checkpoint.model_checkpoint_path:
-            saver.restore(sess, checkpoint.model_checkpoint_path)
-            print("Model restored from ", checkpoint.model_checkpoint_path)
-        #     # Take steps from the file path
-            global_step = int(checkpoint.model_checkpoint_path.split('/')[-1].split('-')[-1])
-        #     FLAGS.max_steps = FLAGS.max_steps + step
-        else:
-            print ("no checkpoint file found.")
-            return
-
-
-        # number of steps to evaluate for
-        num_steps = 1000
-
-
-        coord = tf.train.Coordinator()
-        try:
-            # Extend current queue runner threads to feed evaluation data into the validation graph
-            threads = []
-            for queue_runner in tf.get_collection(tf.GraphKeys.QUEUE_RUNNERS):
-                threads.extend(queue_runner.create_threads(sess, coord=coord, daemon=True, start=True))
-
-
-            num_iterations = int(math.ceil(num_steps / FLAGS.batch_size))
-            step = 0
-            tot_accuracy = 0
-            while step < num_iterations and not coord.should_stop():
-                accuracy = sess.run(valid.prediction, feed_dict=feed_dict)
-                tot_accuracy += accuracy
-                step += 1
-
-            avg_accuracy = tot_accuracy / num_iterations
-            print ("validation accuracy: ", avg_accuracy)
-
-
-
-        except Exception as e:
-            coord.request_stop(e)
-        finally:
-            coord.request_stop()
-            coord.join(threads)
+    Args:
+        embedding: an embedding variable
+        writer: a Tensorflow writer object
+    """
+    config = tf.contrib.tensorboard.plugins.projector.ProjectorConfig()
+    embedding_config = config.embeddings.add()
+    embedding_config.tensor_name = embedding.name
+    if FLAGS.embedding_metadata:
+        # Link this tensor to its metadata file (e.g. labels).
+        # NOTE: Directory relative to where you start Tensorboard
+        embedding_config.sprite.image_path = os.path.join(
+            DATADIR, "sprite_1024.png")
+        embedding_config.metadata_path = os.path.join(
+            DATADIR, "labels_1024.tsv")
+        # Specify the width and height of a single thumbnail.
+        embedding_config.sprite.single_image_dim.extend([WIDTH, HEIGHT])
+    tf.contrib.tensorboard.plugins.projector.visualize_embeddings(
+        writer, config)
 
 
 def make_hparam_str(learning_rate, num_layers, state_size):
@@ -482,13 +463,19 @@ def make_hparam_str(learning_rate, num_layers, state_size):
     """
     return "lr=%.0e,ca=%d,state=%d" % (learning_rate, num_layers, state_size)
 
+
 def main(argv=None):
     # Generate dataset of (shape) if none exists in data_dir already
-    maybe_generate_data(FLAGS.data_dir, shape=(width, height, depth),
-                        num_examples=FLAGS.num_examples)
+    maybe_generate_data(
+        DATADIR,
+        shape=FLAGS.grid_shape,
+        stone_probability=0.45,
+        num_examples=FLAGS.num_examples // FLAGS.num_files,
+        num_files=FLAGS.num_files)
 
-    hparam = make_hparam_str(FLAGS.learning_rate, FLAGS.num_layers, FLAGS.state_size)
-    run_path = os.path.join(FLAGS.train_dir, hparam)
+    hparam = make_hparam_str(
+        FLAGS.learning_rate, FLAGS.num_layers, FLAGS.state_size)
+    run_path = os.path.join(FLAGS.train_dir, PREFIX, hparam)
 
     print ("Starting run for %s" % hparam)
 
@@ -497,9 +484,9 @@ def main(argv=None):
         tf.gfile.DeleteRecursively(run_path)
     tf.gfile.MakeDirs(run_path)
 
-    run_training(run_path)
+    # run training
+    conv_ca_model(run_path)
 
 
 if __name__ == "__main__":
-    # Runs main with args defined in tf.app.FLAGS
     tf.app.run()

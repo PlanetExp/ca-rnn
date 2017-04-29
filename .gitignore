@@ -97,3 +97,6 @@ sublime/
 # Project specific
 tmp/
 venv2/
+venv3/
+conv_ca/img/
+graph/

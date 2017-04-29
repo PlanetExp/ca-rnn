@@ -3,13 +3,35 @@
 Created 6 mars 2017
 @author Frederick Heidrich
 '''
-import numpy as np
 import tensorflow as tf
+import numpy as np
 
+from sklearn.utils import shuffle
+
+import csv
 import sys
 import os
 
 NUM_EXAMPLES = 10000
+
+
+# def generate_blobs():
+
+#     width = 20
+#     height = 20
+#     k = 1
+
+#     def index(i, j):
+
+
+#     grid = np.zeros((1, width, height), dtype=np.int8)
+
+#     for i in range(k):
+
+
+#     filled = set()
+
+
 
 
 def get_connection_length(board, start_set=None, target_set=None):
@@ -82,8 +104,8 @@ def board_generator(
     fail_count = 0
     while True:
         # Generate boards with random distribution of stones
-        board = np.random.choice(k_value, 
-                                 size=[shape[0], shape[1], shape[2]],
+        board = np.random.choice(k_value,
+                                 size=[shape[0], shape[1]],
                                  p=[1 - stone_probability, stone_probability])
 
         connection_length = get_connection_length(board)
@@ -132,10 +154,9 @@ def generate_constrained_dataset(
 
     width = shape[0]
     height = shape[1]
-    depth = shape[2]
 
     # theoretical_max_length = int(height * width / 2 + width / 2)
-    inputs = np.empty((num_examples, width, height, depth), np.int8)  # boards
+    inputs = np.empty((num_examples, width, height), np.int8)  # boards
     labels = np.empty((num_examples, ), np.int8)  # connection length
 
     pos_board_generator = board_generator(shape, 1, 1, stone_probability=stone_probability)
@@ -146,6 +167,7 @@ def generate_constrained_dataset(
     for i in range(num_examples):
         if i < num_pos_examples:
             inputs[i], labels[i] = next(pos_board_generator)
+            # print ("positive board generated.")
         else:
             inputs[i], labels[i] = next(neg_board_generator)
 
@@ -156,6 +178,7 @@ def generate_constrained_dataset(
     # ad-hoc shuffling
     # NOTE: creates copies
     if shuffle:
+        # inputs, labels = shuffle(inputs, labels, random_state=12)
         perm = np.random.permutation(len(inputs))
         inputs = inputs[perm]
         labels = labels[perm]
@@ -271,16 +294,43 @@ def read_and_decode(filename_queue, shape=None):
     return example, label
 
 
+def generate_batch(examples, labels, batch_size, num_threads, istrain):
+    # min_after_dequeue defines how big a buffer we will randomly sample
+    #   from -- bigger means better shuffling but slower start up and more
+    #   memory used.
+    # capacity must be larger than min_after_dequeue and the amount larger
+    #   determines the maximum we will prefetch.  Recommendation:
+    #   min_after_dequeue + (num_threads + a small safety margin) * batch_size
+    min_fraction_of_examples_in_queue = 0.4
+    min_queue_examples = int(NUM_EXAMPLES *
+                             min_fraction_of_examples_in_queue)
+
+    if istrain:
+        example_batch, label_batch = tf.train.shuffle_batch(
+            [examples, labels],
+            batch_size=batch_size,
+            capacity=min_queue_examples + 3 * batch_size,
+            num_threads=num_threads,
+            min_after_dequeue=min_queue_examples)
+    else:
+        example_batch, label_batch = tf.train.batch(
+            [examples, labels],
+            batch_size=batch_size,
+            capacity=min_queue_examples + 3 * batch_size,
+            num_threads=num_threads)
+    return example_batch, label_batch
+
+
 # Create input pipeline from reader
-def input_pipeline(data_dir, batch_size, shape=None, num_threads=1, train=True):
-    with tf.name_scope("input_pipeline_batches"):
+def input_pipeline(data_dir, batch_size, shape=None, num_threads=1, num_files=1, istrain=True, name=None):
+    with tf.name_scope(name or "input_pipeline_batches"):
         data_dir = os.path.join(data_dir, "batches-bin")
-        if train:
+        if istrain:
             filenames = [os.path.join(data_dir, "data_batch_%d.bin" % i)
-                    for i in range(1, 2)]
+                for i in range(num_files)]
         else:
-            filenames = [os.path.join(data_dir, "test_batch.bin")]
-            print ("loading testbatch")
+            filenames = [os.path.join(data_dir, "test_batch_%d.bin" % i)
+                for i in range(num_files)]
 
         for f in filenames:
             if not tf.gfile.Exists(f):
@@ -288,28 +338,70 @@ def input_pipeline(data_dir, batch_size, shape=None, num_threads=1, train=True):
 
         filename_queue = tf.train.string_input_producer(filenames)
         examples, labels = read_and_decode(filename_queue, shape)
+    return generate_batch(examples, labels, batch_size, num_threads, istrain)
 
-        # examples.set_shape([width, height, depth])
-        # labels.set_shape([1])
-        
-        # min_after_dequeue defines how big a buffer we will randomly sample
-        #   from -- bigger means better shuffling but slower start up and more
-        #   memory used.
-        # capacity must be larger than min_after_dequeue and the amount larger
-        #   determines the maximum we will prefetch.  Recommendation:
-        #   min_after_dequeue + (num_threads + a small safety margin) * batch_size
-        min_fraction_of_examples_in_queue = 0.4
-        min_queue_examples = int(NUM_EXAMPLES *
-                                 min_fraction_of_examples_in_queue)
-        example_batch, label_batch = tf.train.shuffle_batch(
-            [examples, labels],
-            batch_size=batch_size,
-            capacity=min_queue_examples + 3 * batch_size,
-            num_threads=num_threads,
-            min_after_dequeue=min_queue_examples)
 
-    # label_batch = tf.reshape(label_batch, [batch_size])
-    return example_batch, label_batch
+def embedding_metadata(data_dir, shape, n):
+    """Extract a specific number of items from binary file
+
+    Args:
+        data_dir:
+        shape:
+        n: number of inputs to extract
+
+    Returns:
+        inputs, labels
+    """
+    with tf.Session() as sess:
+        imgs, lbs = input_pipeline(data_dir, n, shape, istrain=False)
+        coord = tf.train.Coordinator()
+        threads = tf.train.start_queue_runners(sess, coord)
+        try:
+            im, lb = sess.run([imgs, lbs])
+        finally:
+            coord.request_stop()
+            coord.join(threads)
+    return im, lb
+
+
+def save_emdedding_metadata(data_dir, shape, n):
+    """Save dataset metadata to file using csv and matplotlib modules"""
+    im, lb = embedding_metadata(data_dir, shape, n)
+
+    # Generate tab separated file
+    with open("labels_" + str(n) + ".tsv", "w") as f:
+        writer = csv.writer(f, delimiter="\t")
+        for i, l in enumerate(lb):
+            writer.writerow(str(l))
+
+    # Generate sprite image: an image containing n
+    #   number of sub images tiled
+    import matplotlib.image as image
+
+    imgs = np.squeeze(im)
+    rows = []
+    num_rows = int(np.sqrt(n))
+    num_cols = int(np.sqrt(n))
+
+    def index(i, j):
+        return i + j * num_cols
+
+    for j in range(num_rows):
+        row = imgs[j * num_rows]
+        for i in range(num_cols - 1):
+            row = np.concatenate((row, imgs[index(i + 1, j)]), axis=1)
+        rows.append(row)
+
+    img = rows[0]
+    for i in range(num_rows - 1):
+        img = np.concatenate((img, rows[i + 1]), axis=0)
+
+    # print (img.shape)
+    # for i in range(len(im)):
+    #     ii = im[i].squeeze()
+    #     image.imsave("tmp/sprite" + str(i) + ".png", ii, cmap=image.cm.binary)
+
+    image.imsave("sprite_" + str(n) + ".png", img, cmap=image.cm.binary)
 
 
 def maybe_generate_data(data_dir,
@@ -331,8 +423,7 @@ def maybe_generate_data(data_dir,
 
     # generate training batches
     # constrained
-    filenames = ["data_batch_%d.bin" % i for i in range(1, num_files + 1)]
-
+    filenames = ["data_batch_%d.bin" % i for i in range(num_files)]
     for filename in filenames:
         filepath = os.path.join(dest_dir, filename)
         if not os.path.exists(filepath):
@@ -349,16 +440,17 @@ def maybe_generate_data(data_dir,
     # generate testing batches
     # random
     # TODO: generate random dataset
-    filename = "test_batch.bin"
-    filepath = os.path.join(dest_dir, filename)
-    if not os.path.exists(filepath):
-        print("%s not found - generating..." % filename)
-        # utils.generate_dataset(filepath, _progress, **{
-        x, y = generate_constrained_dataset(_progress, **{
-            "num_examples": num_examples or NUM_EXAMPLES,
-            "stone_probability": stone_probability,
-            "shape": shape})
-        _convert_to_tfrecords(x, shape, y, filepath)
-        print()
-        statinfo = os.stat(filepath)
-        print("Successfully generated", filename, statinfo.st_size, "bytes.")
+    filenames = ["test_batch_%d.bin" % i for i in range(num_files)]
+    for filename in filenames:
+        filepath = os.path.join(dest_dir, filename)
+        if not os.path.exists(filepath):
+            print("%s not found - generating..." % filename)
+            # utils.generate_dataset(filepath, _progress, **{
+            x, y = generate_constrained_dataset(_progress, **{
+                "num_examples": num_examples or NUM_EXAMPLES,
+                "stone_probability": stone_probability,
+                "shape": shape})
+            _convert_to_tfrecords(x, shape, y, filepath)
+            print()
+            statinfo = os.stat(filepath)
+            print("Successfully generated", filename, statinfo.st_size, "bytes.")
