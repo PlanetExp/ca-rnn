@@ -2,7 +2,7 @@
 
 import tensorflow as tf
 import numpy as np
-
+from pprint import pprint
 import os
 import utils
 import random
@@ -13,21 +13,26 @@ import random
 
 class InputTests(tf.test.TestCase):
 
-    def blobs(self):
-        width = 5
-        height = 5
-        k = 1
+    def testGenerator(self):
+        x, y = utils.generate_constrained_dataset((20, 20), 8, stone_probability=0.4)
 
-        # def index(i, j)
+        # pprint(x)
+        pprint(y)
 
-        grid = np.zeros((width * height), dtype=np.uint8)
+    # def blobs(self):
+    #     width = 5
+    #     height = 5
+    #     k = 1
 
-        for i in range(k):
-            r = srandom.randint(len(grid))
-            grid[r] = 1
+    #     # def index(i, j)
 
-        print(grid.shape)
-        print("sometext")
+    #     grid = np.zeros((width * height), dtype=np.uint8)
+
+    #     for i in range(k):
+    #         r = srandom.randint(len(grid))
+    #         grid[r] = 1
+
+    #     print(grid.shape)
 
         # filled = set()
 

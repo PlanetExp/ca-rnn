@@ -32,10 +32,13 @@ Supervisor: Dr. Frederic Maire
 Date: 13/4/17
 """
 import tensorflow as tf
-import numpy as np
+# import numpy as np
 
 from datetime import datetime, timedelta
 from time import time
+from pprint import pprint
+
+import json
 import math
 import os
 # import re
@@ -51,21 +54,23 @@ class FLAGS(object):
 # PARAMETERS
 # ----------
 # Set number of Cellular Automaton layers to stack.
-FLAGS.num_layers = 20
-FLAGS.state_size = 2
-FLAGS.batch_size = 32
+FLAGS.num_layers = 1
+FLAGS.state_size = 1
+FLAGS.batch_size = 128
 # Number of examples to generate in the training set.
-FLAGS.num_examples = 1024
+FLAGS.num_examples = 65537
 # Number of files to split the training set into
-FLAGS.num_files = 2
+FLAGS.num_files = 4
 FLAGS.num_classes = 2
 # Set whether to reuse variables between CA layers or not.
 FLAGS.reuse = True
 FLAGS.learning_rate = 0.1
+# Percent of dropout to apply to training process
+FLAGS.dropout = 1.0
 # Number of steps before printing logs.
 FLAGS.log_frequency = 100
 # Set maximum number of steps to train for
-FLAGS.max_steps = 10000
+FLAGS.max_steps = 1000
 # Stop after an avg validation accuracy have been reached (e.g we know it
 # can learn)
 FLAGS.max_valid_accuracy = 0.98
@@ -92,6 +97,9 @@ FLAGS.num_embeddings = 32
 # view these in either Tensorboard or save to json file with a
 # tensorflow.python.client.timeline object and and view a web browser
 FLAGS.run_metadata = False
+FLAGS.snapshot = True
+FLAGS.snap_dir = "tmp/snaps"
+FLAGS.save_data = True
 
 # Data parameters
 WIDTH = FLAGS.grid_shape[0]
@@ -126,6 +134,28 @@ def conv_layer(x, kernel,
     return act
 
 
+def save_activation_snapshot(snap, step, path):
+    """Save an image of each layer and each depths of the convolution
+    layer. Each depth dimension with get its own width, height image saved.
+
+    Args:
+        snap: a np.ndarray of size [width, height, depth]
+        step: the step the snapshot was taken at
+        path: directory where to save the snaps
+    """
+    import matplotlib.image as image
+
+    # print (snap)
+    # print (len(snap))
+    for i in range(len(snap)):
+        # print (snap[i].shape)
+        for j in range(FLAGS.state_size):
+            img = snap[i][0, :, :, j].squeeze()
+            # print (img.shape)
+            s = "%d-s%d_l%d.png" % (step, j, i)
+            image.imsave(os.path.join(path, s), img)
+
+
 class ConvCA(object):
     def __init__(self, inputs, labels, keep_prob, istrain=True):
         """Creates inference logits and sets up a graph that can be reached
@@ -147,6 +177,7 @@ class ConvCA(object):
 
         # Cellular Automaton module
         # -------------------------
+        self.activation_snapshot = []
         with tf.variable_scope("ca_conv") as scope:
             # List of all layer states
             state_layers = [conv1]
@@ -155,22 +186,10 @@ class ConvCA(object):
                 if FLAGS.reuse and layer > 0:
                     scope.reuse_variables()
 
-                # w = tf.get_variable(
-                #     "weights", [3, 3, FLAGS.state_size, FLAGS.state_size],
-                #     initializer=tf.contrib.layers.xavier_initializer(), dtype=tf.float32)
-                # b = tf.get_variable(
-                #     "biases", [FLAGS.state_size],
-                #     initializer=tf.zeros_initializer())
-                # conv = tf.nn.conv2d(
-                #     state_layers[-1], w, strides=[1, 1, 1, 1], padding="SAME")
-                # conv_state = tf.nn.relu(conv + b)
-
-                # self.embedding_input = tf.reshape(conv_state, [-1, 20 * 20 * 2])
-                # self.embedding_size = 20 * 20 * 2
-
                 conv_state = conv_layer(
                     state_layers[-1], [3, 3, FLAGS.state_size, FLAGS.state_size], scope=scope)
                 state_layers.append(conv_state)
+                self.activation_snapshot.append(conv_state)
 
         # Output module
         # -------------
@@ -230,7 +249,8 @@ class ConvCA(object):
                 self.embedding_size = WIDTH * HEIGHT
 
 
-def conv_ca_model(run_path):
+def conv_ca_model(run_path, args=None):
+    """Links inputs and starts a training session and performs logging at certain steps."""
 
     tf.reset_default_graph()
     sess = tf.Session()
@@ -273,6 +293,9 @@ def conv_ca_model(run_path):
     # EMBEDDING
     # ---------
 
+    # This embedding attemps to reduce a batch of dimensions of the grid into a
+    # single point so that a single point represent a single grid that can be
+    # plotted into a 2/3 dimensinoal space with t-SNE.
     if FLAGS.embedding:
         embedding = tf.Variable(tf.zeros([FLAGS.num_embeddings,
                                           valid.embedding_size]),
@@ -309,41 +332,46 @@ def conv_ca_model(run_path):
         threads = tf.train.start_queue_runners(sess=sess, coord=coord)
 
         # fetch embedding images for t-SNE visualization
-        # x_embedding_batch, y_embedding_batch = sess.run([x_embedding, y_embedding])
+        # x_embedding_batch, y_embedding_batch = sess.run([x_embedding,
+        # y_embedding])
 
         # Training loop
-        # ==============================================================
+        # -------------
+
         # Training loop runs until coordinator have got a requested to stop
         tot_accuracy = 0.0
         tot_valid_accuracy = 0.0
+        accuracies = []
+        accuracies_valid = []
         while not coord.should_stop():
-
-            # Run training
-            # --------------------------------
+            # training
             x_batch, y_batch = sess.run([inputs, labels])
             feed_dict = {inputs_pl: x_batch,
-                         labels_pl: y_batch, keep_prob: 0.5}
-            sess_run_args = [train.optimizer, train.loss, train.prediction]
-            _, loss_value, accuracy = sess.run(sess_run_args, feed_dict)
+                         labels_pl: y_batch, keep_prob: FLAGS.dropout}
+            _, loss, accuracy = sess.run(
+                [train.optimizer, train.loss, train.prediction], feed_dict)
 
+            # validation
             x_batch, y_batch = sess.run([inputs_valid, labels_valid])
             feed_dict = {inputs_pl: x_batch,
                          labels_pl: y_batch, keep_prob: 1.0}
-            valid_accuracy = sess.run(valid.prediction, feed_dict)
+            valid_accuracy, snap = sess.run(
+                [valid.prediction, valid.activation_snapshot], feed_dict)
 
             tot_accuracy += accuracy
             tot_valid_accuracy += valid_accuracy
             step += 1
 
-            # After run and logging
-            # --------------------------------
-            # Take a snapshot of graph stats every 500th step and merge summary
-            # and debug images. Merge summaries every 10th step.
+            # logging
+            # -------
+
             if step % 10 == 0:
                 summary = sess.run(merged_summary, feed_dict)
                 writer.add_summary(summary, step)
             elif step % 500 == 499:
                 if FLAGS.run_metadata:
+                    # Optionally write run metadata into the checkoint file,
+                    # such as resource usage, memory consumption runtimes etc.
                     run_options = tf.RunOptions(
                         trace_level=tf.RunOptions.FULL_TRACE)
                     run_metadata = tf.RunMetadata()
@@ -363,6 +391,7 @@ def conv_ca_model(run_path):
                 coord.request_stop()
 
             if step % FLAGS.log_frequency == 0:
+                save_activation_snapshot(snap, step, args[0])
                 current_time = time()
                 duration = current_time - start_time
                 start_time = current_time
@@ -371,6 +400,10 @@ def conv_ca_model(run_path):
                 avg_accuracy_valid = tot_valid_accuracy / FLAGS.log_frequency
                 tot_accuracy = 0.0
                 tot_valid_accuracy = 0.0
+
+                # save logs of [[wall time, step, avg_accuracy]]
+                accuracies.append([time(), step, avg_accuracy])
+                accuracies_valid.append([time(), step, avg_accuracy])
 
                 if avg_accuracy_valid > FLAGS.max_valid_accuracy:
                     coord.request_stop()
@@ -392,16 +425,16 @@ def conv_ca_model(run_path):
                 sec_per_batch = float(duration / FLAGS.log_frequency)
                 format_str = ("%s step %d/%d, epoch %.2f, loss: %.4f, avg. accuracy: %.4f (%.4f) "
                               "(%.1fex/s; %.3fs/batch)")
-                print (format_str % (datetime.now().strftime("%m/%d %H:%M:%S"),
-                                     step, FLAGS.max_steps, epoch, loss_value, avg_accuracy, avg_accuracy_valid,
-                                     examples_per_sec, sec_per_batch))
+                print(format_str % (datetime.now().strftime("%m/%d %H:%M:%S"),
+                                    step, FLAGS.max_steps, epoch, loss, avg_accuracy, avg_accuracy_valid,
+                                    examples_per_sec, sec_per_batch))
 
                 progress = float(step / FLAGS.max_steps)
                 estimated_duration = (
                     FLAGS.max_steps * FLAGS.batch_size) * (1 - progress) / examples_per_sec
                 t = timedelta(seconds=int(estimated_duration))
                 format_str = "Estimated duration: %s (%.1f%%)"
-                print (format_str % (str(t), progress * 100))
+                print(format_str % (str(t), progress * 100))
 
             if step % 500 == 0:
                 if FLAGS.embedding:
@@ -416,6 +449,10 @@ def conv_ca_model(run_path):
     except Exception as e:
         coord.request_stop(e)
     finally:
+
+        # SAVE AND REPORT
+        # ---------------
+
         save_path = saver.save(sess, filename, global_step=step)
         print("Model saved in file: %s" % save_path)
 
@@ -426,10 +463,44 @@ def conv_ca_model(run_path):
         # Print some last stats
         tot_duration = time() - tot_running_time
         t = timedelta(seconds=int(tot_duration))
-        print ("Total running time: %s" % t)
+        print("Total running time: %s" % t)
+        print("Layers: %d State dims: %d" %
+              (FLAGS.num_layers, FLAGS.state_size))
 
-    writer.close()
-    sess.close()
+        writer.close()
+        sess.close()
+        # report some stats so gridsearch can save them
+
+        if FLAGS.save_data:
+            dump = [{
+                "timestamp": "%s" % datetime.now(),
+                "runtime": "%s" % t,
+                "training": accuracies,
+                "validation": accuracies_valid,
+                "batch_size": FLAGS.batch_size,
+                "learning_rate": FLAGS.learning_rate,
+                "layers": FLAGS.num_layers,
+                "state_size": FLAGS.state_size,
+                "num_examples": FLAGS.num_examples,
+                "epochs": epoch,
+                "dropout": FLAGS.dropout
+            }]
+            save_json(dump)
+
+
+def save_json(data):
+    """Save data dump to json file for visualization outside tensorboard"""
+    filename = "data3.json"
+    if os.path.isfile(filename) and os.stat(filename).st_size != 0:
+        with open(filename) as f:
+            d = json.load(f)
+            d.extend(data)
+            # pprint(d)
+            data = d
+
+    with open(filename, "w") as out:
+        json.dump(data, out)
+        print("json file saved: ", filename)
 
 
 def setup_embedding_projector(embedding, writer):
@@ -465,6 +536,8 @@ def make_hparam_str(learning_rate, num_layers, state_size):
 
 
 def main(argv=None):
+    """Runs main script by evaluating if data exists in data directory
+    possibly generating new, generates a hparam string and runs training."""
     # Generate dataset of (shape) if none exists in data_dir already
     maybe_generate_data(
         DATADIR,
@@ -477,15 +550,24 @@ def main(argv=None):
         FLAGS.learning_rate, FLAGS.num_layers, FLAGS.state_size)
     run_path = os.path.join(FLAGS.train_dir, PREFIX, hparam)
 
-    print ("Starting run for %s" % hparam)
+    print("Starting run for %s" % hparam)
 
     # Flush run_path for convenience
     if tf.gfile.Exists(run_path):
         tf.gfile.DeleteRecursively(run_path)
     tf.gfile.MakeDirs(run_path)
 
+    args = []
+    if FLAGS.snapshot:
+        snap_path = os.path.join(FLAGS.snap_dir, hparam)
+        # print(snap_path)
+        if tf.gfile.Exists(snap_path):
+            tf.gfile.DeleteRecursively(snap_path)
+        tf.gfile.MakeDirs(snap_path)
+        args.append(snap_path)
+
     # run training
-    conv_ca_model(run_path)
+    conv_ca_model(run_path, args)
 
 
 if __name__ == "__main__":

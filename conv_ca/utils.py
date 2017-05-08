@@ -15,25 +15,6 @@ import os
 NUM_EXAMPLES = 10000
 
 
-# def generate_blobs():
-
-#     width = 20
-#     height = 20
-#     k = 1
-
-#     def index(i, j):
-
-
-#     grid = np.zeros((1, width, height), dtype=np.int8)
-
-#     for i in range(k):
-
-
-#     filled = set()
-
-
-
-
 def get_connection_length(board, start_set=None, target_set=None):
     '''
         Determine the connectivity between the cell sets 'start_set' and
@@ -47,19 +28,19 @@ def get_connection_length(board, start_set=None, target_set=None):
         Return  connection_length
              connection_length is None  is the cell sets are not connected
              otherwise, it is the length of the connecting path
-             
+
         Params
             board : uint8 np array,
                     zero -> background
                     non-zero -> stone
             start_set, target_set : cell coords  of the cell sets.sys.maxsize
                                     Lists of (row,col) pairs
-                                    
+
     '''
     num_rows, num_cols = board.shape[0], board.shape[1]
 
     # .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .
-    
+
     def getNeighbours(A, T):
         '''
             Return the set 'N' of stony neighbors of 'A', that are not in 'T' (taboo set)
@@ -73,14 +54,15 @@ def get_connection_length(board, start_set=None, target_set=None):
                 if ((0 <= rn < num_rows) and (0 <= cn < num_cols) and board[rn, cn] != 0 and (rn, cn) not in T):
                     N.add((rn, cn))
         return N
-    
+
     # .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .
 
     if start_set is None:
         start_set = [(0, c) for c in range(num_cols) if board[0, c] != 0]
 
     if target_set is None:
-        target_set = [(num_rows - 1, c) for c in range(num_cols) if board[num_cols - 1, c] != 0]
+        target_set = [(num_rows - 1, c)
+                      for c in range(num_cols) if board[num_cols - 1, c] != 0]
 
     g = 0  # generation index
     T = set()  # taboo cells
@@ -112,13 +94,12 @@ def board_generator(
 
         if connection_length is None:
             # connectivity = sys.maxsize
-            connectivity = 0
+            connectivity = -1
         else:
-            # connectivity = connection_length
-            connectivity = 1
-        
+            connectivity = connection_length
+
         if (min_connection_length <= connectivity <= max_connection_length):
-            # print ("success after ", fail_count, " failures")
+            print ("success after ", fail_count, " failures")
             fail_count = 0  # reset counter
             yield board, connectivity  # X, y
         else:
@@ -126,6 +107,12 @@ def board_generator(
 
 
 def generate_constrained_dataset(
+        shape=None,
+        num_examples=None,
+        shuffle_dataset=True,
+        min_lenght=0,
+        max_length=None,
+        stone_probability=0.5):
         # filename,
         # size,
         # num_positive_examples,
@@ -133,11 +120,7 @@ def generate_constrained_dataset(
         # stone_probability=0.5,
         # k_value=2,
         # verbose=False):
-        progress_fn=None,
-        shape=None,
-        num_examples=None,
-        shuffle=True,
-        stone_probability=0.5):
+        # progress_fn=None,
     '''
     Generates a constrained dataset of 50/50 positive and negative examples
         and converts them to a .tfrecords file on the disk where filepath
@@ -155,12 +138,14 @@ def generate_constrained_dataset(
     width = shape[0]
     height = shape[1]
 
-    # theoretical_max_length = int(height * width / 2 + width / 2)
+    theoretical_max_length = int(height * width / 2 + width / 2)
     inputs = np.empty((num_examples, width, height), np.int8)  # boards
     labels = np.empty((num_examples, ), np.int8)  # connection length
 
-    pos_board_generator = board_generator(shape, 1, 1, stone_probability=stone_probability)
-    neg_board_generator = board_generator(shape, 0, 0, stone_probability=stone_probability)
+    pos_board_generator = board_generator(
+        shape, min_lenght, theoretical_max_length, stone_probability=stone_probability)
+    neg_board_generator = board_generator(
+        shape, -1, -1, stone_probability=stone_probability)
 
     num_pos_examples = num_examples // 2
 
@@ -175,16 +160,12 @@ def generate_constrained_dataset(
             print('Generating {} boards. Progress: {}/{}'.format(
                 'positive' if i < num_pos_examples else 'negative', i, num_examples))
 
-    # ad-hoc shuffling
-    # NOTE: creates copies
-    if shuffle:
-        # inputs, labels = shuffle(inputs, labels, random_state=12)
-        perm = np.random.permutation(len(inputs))
-        inputs = inputs[perm]
-        labels = labels[perm]
+    if shuffle_dataset:
+        inputs, labels = shuffle(inputs, labels, random_state=1234)
+        # perm = np.random.permutation(len(inputs))
+        # inputs = inputs[perm]
+        # labels = labels[perm]
 
-    # save to file
-    # _convert_to_tfrecords(inputs, shape, labels, filepath)
     return inputs, labels
 
 
@@ -224,7 +205,7 @@ def _convert_to_tfrecords(inputs, shape, labels, filepath):
     '''
     # print('Writing', filepath)
     writer = tf.python_io.TFRecordWriter(filepath)
-    
+
     inputs = inputs.astype(np.int8)
     labels = labels.astype(np.int8)
 
@@ -259,7 +240,7 @@ def read_and_decode(filename_queue, shape=None):
     height = shape[1]
     depth = shape[2]
     record_byte_length = label_bytes + width * height
-    
+
     with tf.name_scope("read_and_decode"):
         # Length of record bytes in the dataset
         # Defined in utils module
@@ -282,8 +263,8 @@ def read_and_decode(filename_queue, shape=None):
 
         # remaining bytes is the example
         example = tf.reshape(tf.strided_slice(record_bytes,
-                             begin=[label_bytes],
-                             end=[record_byte_length]), [width, height, depth])
+                                              begin=[label_bytes],
+                                              end=[record_byte_length]), [width, height, depth])
         example = tf.cast(example, tf.float32)
         example.set_shape([width, height, depth])
         label.set_shape(1)
@@ -327,10 +308,10 @@ def input_pipeline(data_dir, batch_size, shape=None, num_threads=1, num_files=1,
         data_dir = os.path.join(data_dir, "batches-bin")
         if istrain:
             filenames = [os.path.join(data_dir, "data_batch_%d.bin" % i)
-                for i in range(num_files)]
+                         for i in range(num_files)]
         else:
             filenames = [os.path.join(data_dir, "test_batch_%d.bin" % i)
-                for i in range(num_files)]
+                         for i in range(num_files)]
 
         for f in filenames:
             if not tf.gfile.Exists(f):
@@ -418,7 +399,7 @@ def maybe_generate_data(data_dir,
     # TODO: not in use
     def _progress(count, block_size, total_size):
         sys.stdout.write("\r>> Generating %s %.1f%%" % (filename,
-            float(count * block_size) / float(total_size) * 100.0))
+                                                        float(count * block_size) / float(total_size) * 100.0))
         sys.stdout.flush()
 
     # generate training batches
@@ -435,7 +416,8 @@ def maybe_generate_data(data_dir,
             _convert_to_tfrecords(x, shape, y, filepath)
             print()
             statinfo = os.stat(filepath)
-            print("Successfully generated", filename, statinfo.st_size, "bytes.")
+            print("Successfully generated", filename,
+                  statinfo.st_size, "bytes.")
 
     # generate testing batches
     # random
@@ -453,4 +435,5 @@ def maybe_generate_data(data_dir,
             _convert_to_tfrecords(x, shape, y, filepath)
             print()
             statinfo = os.stat(filepath)
-            print("Successfully generated", filename, statinfo.st_size, "bytes.")
+            print("Successfully generated", filename,
+                  statinfo.st_size, "bytes.")
