@@ -31,20 +31,24 @@ Author: Frederick Heidrich
 Supervisor: Dr. Frederic Maire
 Date: 13/4/17
 """
-import tensorflow as tf
-# import numpy as np
+
 
 from datetime import datetime, timedelta
+from timeit import default_timer as timer
 from time import time
-from pprint import pprint
+# from pprint import pprint
 
+import csv
 import json
 import math
 import os
 # import re
 
+import tensorflow as tf
+import numpy as np
 from utils import input_pipeline, maybe_generate_data, embedding_metadata
-
+from random_walker import load_hdf5
+from dataset import create_datasets
 
 class FLAGS(object):
     """Temporary wrapper class for settings"""
@@ -56,11 +60,9 @@ class FLAGS(object):
 # Set number of Cellular Automaton layers to stack.
 FLAGS.num_layers = 1
 FLAGS.state_size = 1
-FLAGS.batch_size = 128
-# Number of examples to generate in the training set.
-FLAGS.num_examples = 65537
-# Number of files to split the training set into
-FLAGS.num_files = 4
+# The run number to save data to
+FLAGS.run = 6
+FLAGS.batch_size = 256
 FLAGS.num_classes = 2
 # Set whether to reuse variables between CA layers or not.
 FLAGS.reuse = True
@@ -70,16 +72,15 @@ FLAGS.dropout = 1.0
 # Number of steps before printing logs.
 FLAGS.log_frequency = 100
 # Set maximum number of steps to train for
-FLAGS.max_steps = 1000
-# Stop after an avg validation accuracy have been reached (e.g we know it
-# can learn)
-FLAGS.max_valid_accuracy = 0.98
+FLAGS.max_steps = 15000
+# Fraction of dataset to split into test samples
+FLAGS.test_size = 0.2
 # Set epsilon for Adam optimizer
-FLAGS.epsilon = 1.0
+FLAGS.epsilon = 0.9
 # Start a number of threads per processor.
 FLAGS.num_threads = 1
 # Set various directories for files.
-FLAGS.data_dir = "tmp/data"
+FLAGS.data_dir = "data"
 FLAGS.train_dir = "tmp/train"
 FLAGS.valid_dir = "tmp/valid"
 FLAGS.checkpoint_dir = "tmp/train"
@@ -89,7 +90,7 @@ FLAGS.restore = False
 # Size of grid: tuple of dim (width, height, depth)
 FLAGS.grid_shape = (20, 20, 1)
 # Whether or not to record embeddings for this run
-FLAGS.embedding = True
+FLAGS.embedding = False
 # Whether to save image and label data per embedding
 FLAGS.embedding_metadata = False
 FLAGS.num_embeddings = 32
@@ -97,8 +98,10 @@ FLAGS.num_embeddings = 32
 # view these in either Tensorboard or save to json file with a
 # tensorflow.python.client.timeline object and and view a web browser
 FLAGS.run_metadata = False
-FLAGS.snapshot = True
+# Saves snapshots of the layer activations in separate folder
+FLAGS.snapshot = False
 FLAGS.snap_dir = "tmp/snaps"
+# Whether to save run statistics or not (True)
 FLAGS.save_data = True
 
 # Data parameters
@@ -107,30 +110,31 @@ HEIGHT = FLAGS.grid_shape[1]
 DEPTH = FLAGS.grid_shape[2]
 PREFIX = str(WIDTH) + "x" + str(HEIGHT)
 DATADIR = os.path.join(FLAGS.data_dir, PREFIX)
+DATASET = os.path.join(FLAGS.data_dir, PREFIX, "connectivity.h5")
 
 
-def _add_summaries(w, b, act):
+def _add_summaries(wights, bias, act):
     """Helper to add summaries"""
-    tf.summary.histogram("weights", w)
-    tf.summary.histogram("biases", b)
+    tf.summary.histogram("weights", wights)
+    tf.summary.histogram("biases", bias)
     tf.summary.histogram("activations", act)
     tf.summary.scalar("sparsity", tf.nn.zero_fraction(act))
 
 
-def conv_layer(x, kernel,
+def conv_layer(inputs, kernel,
                initializer=None, name=None, scope=None):
     """Helper to create convolution layer and add summaries"""
     initializer = initializer or tf.contrib.layers.xavier_initializer()
     with tf.variable_scope(scope or name):
-        w = tf.get_variable("weights", kernel,
-                            initializer=initializer, dtype=tf.float32)
-        b = tf.get_variable("biases", [kernel[3]],
-                            initializer=tf.zeros_initializer())
-        conv = tf.nn.conv2d(x, w,
+        wights = tf.get_variable(
+            "weights", kernel, initializer=initializer, dtype=tf.float32)
+        bias = tf.get_variable(
+            "biases", [kernel[3]], initializer=tf.zeros_initializer())
+        conv = tf.nn.conv2d(inputs, wights,
                             strides=[1, 1, 1, 1],
                             padding="SAME")
-        act = tf.nn.relu(conv + b)
-        _add_summaries(w, b, act)
+        act = tf.nn.relu(conv + bias)
+        # _add_summaries(w, b, act)
     return act
 
 
@@ -147,19 +151,20 @@ def save_activation_snapshot(snap, step, path):
 
     # print (snap)
     # print (len(snap))
-    for i in range(len(snap)):
+    for i in enumerate(snap):
         # print (snap[i].shape)
         for j in range(FLAGS.state_size):
             img = snap[i][0, :, :, j].squeeze()
             # print (img.shape)
-            s = "%d-s%d_l%d.png" % (step, j, i)
-            image.imsave(os.path.join(path, s), img)
+            string = "%d-s%d_l%d.png" % (step, j, i)
+            image.imsave(os.path.join(path, string), img)
 
 
 class ConvCA(object):
     def __init__(self, inputs, labels, keep_prob, istrain=True):
         """Creates inference logits and sets up a graph that can be reached
-            through the properties inference, loss, optimizer and prediction respectively
+            through the properties inference, loss, optimizer and prediction
+            respectively
 
         Args:
             inputs:
@@ -168,7 +173,8 @@ class ConvCA(object):
             istrain: bool whether model is for training or testing, if train
                 create an additional optimizer and loss function
         """
-
+        # conv2d wants 3d data
+        inputs = tf.reshape(inputs, [-1, WIDTH, HEIGHT, 1])
         # Input convolution layer
         # -----------------------
         # Increase input depth from 1 to state_size
@@ -187,7 +193,9 @@ class ConvCA(object):
                     scope.reuse_variables()
 
                 conv_state = conv_layer(
-                    state_layers[-1], [3, 3, FLAGS.state_size, FLAGS.state_size], scope=scope)
+                    state_layers[-1],
+                    [3, 3, FLAGS.state_size, FLAGS.state_size],
+                    scope=scope)
                 state_layers.append(conv_state)
                 self.activation_snapshot.append(conv_state)
 
@@ -208,22 +216,22 @@ class ConvCA(object):
         # Softmax linear
         # --------------
         with tf.variable_scope("softmax_linear"):
-            w = tf.get_variable("weights",
-                                [WIDTH * HEIGHT, FLAGS.num_classes],
-                                initializer=tf.contrib.layers.xavier_initializer(),
-                                dtype=tf.float32)
-            b = tf.get_variable("biases",
-                                [FLAGS.num_classes],
-                                initializer=tf.zeros_initializer())
-            logits = tf.nn.xw_plus_b(flattened, w, b)
-            _add_summaries(w, b, logits)
+            weights = tf.get_variable(
+                "weights", [WIDTH * HEIGHT, FLAGS.num_classes],
+                initializer=tf.contrib.layers.xavier_initializer(),
+                dtype=tf.float32)
+            bias = tf.get_variable(
+                "biases", [FLAGS.num_classes],
+                initializer=tf.zeros_initializer())
+            logits = tf.nn.xw_plus_b(flattened, weights, bias)
+            # _add_summaries(w, b, logits)
         self.inference = logits
 
         with tf.name_scope("prediction"):
             correct_prediction = tf.equal(
                 tf.argmax(logits, 1), tf.cast(labels, tf.int64))
             accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
-            tf.summary.scalar("accuracy", accuracy)
+            # tf.summary.scalar("accuracy", accuracy)
         self.prediction = accuracy
 
         if istrain:
@@ -233,13 +241,14 @@ class ConvCA(object):
                 cross_entropy = tf.reduce_mean(
                     tf.nn.sparse_softmax_cross_entropy_with_logits(
                         logits=logits, labels=labels, name="cross_entropy"))
-                tf.summary.scalar("loss", cross_entropy)
+                # tf.summary.scalar("loss", cross_entropy)
             self.loss = cross_entropy
 
             # Create training optimizer
             with tf.name_scope("optimizer"):
                 train_step = tf.train.AdamOptimizer(
-                    FLAGS.learning_rate, beta1=0.9, beta2=0.999, epsilon=FLAGS.epsilon).minimize(
+                    FLAGS.learning_rate, beta1=0.9, beta2=0.999,
+                    epsilon=FLAGS.epsilon).minimize(
                         cross_entropy)
             self.optimizer = train_step
         else:
@@ -250,66 +259,37 @@ class ConvCA(object):
 
 
 def conv_ca_model(run_path, args=None):
-    """Links inputs and starts a training session and performs logging at certain steps."""
+    """Links inputs and starts a training session and 
+    performs logging at certain steps."""
 
     tf.reset_default_graph()
     sess = tf.Session()
 
-    # INPUTS
-    # ------
+    # Load datasets
+    grids, connections = load_hdf5(DATASET)
+    grids = grids.reshape((-1, WIDTH, HEIGHT, 1))
+    datasets = create_datasets(grids, connections, test_size=0.2)
 
-    with tf.name_scope("inputs"):
-        inputs, labels = input_pipeline(
-            DATADIR, FLAGS.batch_size,
-            shape=FLAGS.grid_shape,
-            num_threads=FLAGS.num_threads, istrain=True, name="train_pipe")
+    # Keep probability for dropout layer
+    keep_prob = tf.placeholder(tf.float32, name="keep_prob")
+    inputs_pl = tf.placeholder(
+        tf.float32, shape=[None, WIDTH, HEIGHT, DEPTH], name="inputs")
+    labels_pl = tf.placeholder(tf.int32, shape=[None], name="labels")
 
-        inputs_valid, labels_valid = input_pipeline(
-            DATADIR, FLAGS.batch_size,
-            shape=FLAGS.grid_shape,
-            num_threads=FLAGS.num_threads, istrain=False, name="valid_pipe")
-
-        # Keep probability for dropout layer
-        keep_prob = tf.placeholder(tf.float32, name="keep_prob")
-        inputs_pl = tf.placeholder(
-            tf.float32, shape=[None, WIDTH, HEIGHT, DEPTH], name="inputs")
-        labels_pl = tf.placeholder(tf.int32, shape=[None], name="labels")
-
-    # GRAPH
-    # -----
-
-    # Make a template out of model to create two models that share the same graph
-    # and variables
+    # Make a template out of model to create two models that
+    # share the same graph and variables
     shared_model = tf.make_template("model", ConvCA)
     with tf.name_scope("train"):
         train = shared_model(inputs_pl, labels_pl, keep_prob)
-    with tf.name_scope("valid"):
-        valid = shared_model(inputs_pl, labels_pl, keep_prob, istrain=False)
+    with tf.name_scope("test"):
+        test = shared_model(inputs_pl, labels_pl, keep_prob, istrain=False)
 
     # Create writer to write summaries to file
     writer = tf.summary.FileWriter(run_path, sess.graph)
     writer.add_graph(sess.graph)
 
-    # EMBEDDING
-    # ---------
-
-    # This embedding attemps to reduce a batch of dimensions of the grid into a
-    # single point so that a single point represent a single grid that can be
-    # plotted into a 2/3 dimensinoal space with t-SNE.
-    if FLAGS.embedding:
-        embedding = tf.Variable(tf.zeros([FLAGS.num_embeddings,
-                                          valid.embedding_size]),
-                                name="embedding")
-        assignment = embedding.assign(valid.embedding_input)
-        x_embedding, y_embedding = embedding_metadata(
-            DATADIR, FLAGS.grid_shape, FLAGS.num_embeddings)
-        setup_embedding_projector(embedding, writer)
-
-    # REST OF GRAPH
-    # -------------
-
     # Create op to merge all summaries into one for writing to disk
-    merged_summary = tf.summary.merge_all()
+    # merged_summary = tf.summary.merge_all()
 
     # Save checkpoints for evaluations
     saver = tf.train.Saver()
@@ -317,190 +297,110 @@ def conv_ca_model(run_path, args=None):
 
     sess.run(tf.global_variables_initializer())
 
-    # RUN
-    # ---
-
-    # Create coordinator and start all threads from input_pipeline
-    # The queue will feed our model with data, so no placeholders are necessary
-    coord = tf.train.Coordinator()
-
     step = 0
-    epoch = 0
-    start_time = time()
+    start_time = timer()
     tot_running_time = start_time
     try:
-        threads = tf.train.start_queue_runners(sess=sess, coord=coord)
-
-        # fetch embedding images for t-SNE visualization
-        # x_embedding_batch, y_embedding_batch = sess.run([x_embedding,
-        # y_embedding])
-
-        # Training loop
-        # -------------
-
-        # Training loop runs until coordinator have got a requested to stop
-        tot_accuracy = 0.0
-        tot_valid_accuracy = 0.0
+        # tot_accuracy = 0.0
+        # tot_valid_accuracy = 0.0
         accuracies = []
-        accuracies_valid = []
-        while not coord.should_stop():
+        test_accuracies = []
+        losses = []
+        while step <= FLAGS.max_steps:
             # training
-            x_batch, y_batch = sess.run([inputs, labels])
-            feed_dict = {inputs_pl: x_batch,
-                         labels_pl: y_batch, keep_prob: FLAGS.dropout}
+            train_batch_x, train_batch_y = datasets.train.next_batch(
+                FLAGS.batch_size)
+            feed_dict = {inputs_pl: train_batch_x,
+                         labels_pl: train_batch_y,
+                         keep_prob: FLAGS.dropout}
             _, loss, accuracy = sess.run(
                 [train.optimizer, train.loss, train.prediction], feed_dict)
+            accuracies.append(accuracy)
+            losses.append(loss)
 
-            # validation
-            x_batch, y_batch = sess.run([inputs_valid, labels_valid])
-            feed_dict = {inputs_pl: x_batch,
-                         labels_pl: y_batch, keep_prob: 1.0}
-            valid_accuracy, snap = sess.run(
-                [valid.prediction, valid.activation_snapshot], feed_dict)
+            # test
+            test_batch_x, test_batch_y = datasets.test.next_batch(
+                FLAGS.batch_size, shuffle_data=False)
+            feed_dict = {inputs_pl: test_batch_x,
+                         labels_pl: test_batch_y,
+                         keep_prob: 1.0}
+            test_accuracy, snap = sess.run(
+                [test.prediction, test.activation_snapshot], feed_dict)
+            test_accuracies.append(test_accuracy)
 
-            tot_accuracy += accuracy
-            tot_valid_accuracy += valid_accuracy
             step += 1
 
             # logging
             # -------
+            # log(step, accuracies)
 
-            if step % 10 == 0:
-                summary = sess.run(merged_summary, feed_dict)
-                writer.add_summary(summary, step)
-            elif step % 500 == 499:
-                if FLAGS.run_metadata:
-                    # Optionally write run metadata into the checkoint file,
-                    # such as resource usage, memory consumption runtimes etc.
-                    run_options = tf.RunOptions(
-                        trace_level=tf.RunOptions.FULL_TRACE)
-                    run_metadata = tf.RunMetadata()
-                    summary = sess.run(
-                        merged_summary, feed_dict, run_options, run_metadata)
-                    writer.add_run_metadata(run_metadata, "step%d" % step)
-                    writer.add_summary(summary, step)
-
-                    # Create the Timeline object, and write it to a json
-                    # tl = tf.python.client.timeline.Timeline(run_metadata.step_stats)
-                    # ctf = tl.generate_chrome_trace_format()
-                    # with open("timeline.json", "w") as f:
-                    #     f.write(ctf)
-
-            # Request to close threads and stop at max_steps
-            if FLAGS.max_steps == step:
-                coord.request_stop()
+            # if step % 50 == 0:
+            #     summary = sess.run(merged_summary, feed_dict)
+            #     writer.add_summary(summary, step)
 
             if step % FLAGS.log_frequency == 0:
-                save_activation_snapshot(snap, step, args[0])
-                current_time = time()
+                # save_activation_snapshot(snap, step, args[0])
+                current_time = timer()
                 duration = current_time - start_time
                 start_time = current_time
 
-                avg_accuracy = tot_accuracy / FLAGS.log_frequency
-                avg_accuracy_valid = tot_valid_accuracy / FLAGS.log_frequency
-                tot_accuracy = 0.0
-                tot_valid_accuracy = 0.0
+                # compute the last log_frequency number of averages
+                avg_accuracy = 1 - np.mean(accuracies)
+                avg_test_accuracy = 1 - np.mean(test_accuracies)
+                avg_loss = np.mean(losses)
 
-                # save logs of [[wall time, step, avg_accuracy]]
-                accuracies.append([time(), step, avg_accuracy])
-                accuracies_valid.append([time(), step, avg_accuracy])
+                write_scalar_summary(
+                    writer, "avg_accuracy/train", avg_accuracy, step)
+                write_scalar_summary(
+                    writer, "avg_accuracy/test", avg_test_accuracy, step)
+                write_scalar_summary(
+                    writer, "avg_loss", avg_loss, step)
 
-                if avg_accuracy_valid > FLAGS.max_valid_accuracy:
-                    coord.request_stop()
+                accuracies = []
+                test_accuracies = []
+                losses = []
 
-                tag = "avg_accuracy/train"
-                value = avg_accuracy
-                s = tf.Summary(
-                    value=[tf.Summary.Value(tag=tag, simple_value=value)])
-                writer.add_summary(s, step)
-
-                tag = "avg_accuracy/valid"
-                value = avg_accuracy_valid
-                s = tf.Summary(
-                    value=[tf.Summary.Value(tag=tag, simple_value=value)])
-                writer.add_summary(s, step)
-
-                epoch += FLAGS.batch_size * FLAGS.log_frequency / FLAGS.num_examples
-                examples_per_sec = FLAGS.log_frequency * FLAGS.batch_size / duration
+                epoch = datasets.train.epochs_completed
+                examples_per_sec = (
+                    FLAGS.log_frequency * FLAGS.batch_size / duration)
                 sec_per_batch = float(duration / FLAGS.log_frequency)
-                format_str = ("%s step %d/%d, epoch %.2f, loss: %.4f, avg. accuracy: %.4f (%.4f) "
+                format_str = ("%s step %d/%d, epoch %.2f, loss: %.4f, "
+                              "avg. mcr: %.4f (%.4f) "
                               "(%.1fex/s; %.3fs/batch)")
-                print(format_str % (datetime.now().strftime("%m/%d %H:%M:%S"),
-                                    step, FLAGS.max_steps, epoch, loss, avg_accuracy, avg_accuracy_valid,
-                                    examples_per_sec, sec_per_batch))
+                print(format_str % (
+                    datetime.now().strftime("%m/%d %H:%M:%S"),
+                    step, FLAGS.max_steps, epoch, loss, avg_accuracy,
+                    avg_test_accuracy, examples_per_sec, sec_per_batch))
 
                 progress = float(step / FLAGS.max_steps)
                 estimated_duration = (
-                    FLAGS.max_steps * FLAGS.batch_size) * (1 - progress) / examples_per_sec
-                t = timedelta(seconds=int(estimated_duration))
+                    (FLAGS.max_steps * FLAGS.batch_size) *
+                    (1 - progress) / examples_per_sec)
+                timed = timedelta(seconds=int(estimated_duration))
                 format_str = "Estimated duration: %s (%.1f%%)"
-                print(format_str % (str(t), progress * 100))
+                print (format_str % (str(timed), progress * 100))
 
-            if step % 500 == 0:
-                if FLAGS.embedding:
-                    # Assign embeddings to variable
-                    feed_dict = {inputs_pl: x_embedding,
-                                 labels_pl: y_embedding, keep_prob: 1.0}
-                    sess.run(assignment, feed_dict)
-
-                # Save the model once on a while
+            if step % 1000 == 0:
+                # Save the model periodically
                 saver.save(sess, filename, global_step=step)
-
-    except Exception as e:
-        coord.request_stop(e)
     finally:
+        saver.save(sess, filename, global_step=step)
 
-        # SAVE AND REPORT
-        # ---------------
-
-        save_path = saver.save(sess, filename, global_step=step)
-        print("Model saved in file: %s" % save_path)
-
-        coord.request_stop()
-        # Wait for threads to finish
-        coord.join(threads)
-
-        # Print some last stats
-        tot_duration = time() - tot_running_time
-        t = timedelta(seconds=int(tot_duration))
-        print("Total running time: %s" % t)
-        print("Layers: %d State dims: %d" %
-              (FLAGS.num_layers, FLAGS.state_size))
+        tot_duration = timer() - tot_running_time
+        timed = timedelta(seconds=int(tot_duration))
+        print ("Total running time: %s" % timed)
+        print ("Layers: %d State dims: %d" %
+            (FLAGS.num_layers, FLAGS.state_size))
 
         writer.close()
         sess.close()
-        # report some stats so gridsearch can save them
-
-        if FLAGS.save_data:
-            dump = [{
-                "timestamp": "%s" % datetime.now(),
-                "runtime": "%s" % t,
-                "training": accuracies,
-                "validation": accuracies_valid,
-                "batch_size": FLAGS.batch_size,
-                "learning_rate": FLAGS.learning_rate,
-                "layers": FLAGS.num_layers,
-                "state_size": FLAGS.state_size,
-                "num_examples": FLAGS.num_examples,
-                "epochs": epoch,
-                "dropout": FLAGS.dropout
-            }]
-            save_json(dump)
 
 
-def save_json(data):
-    """Save data dump to json file for visualization outside tensorboard"""
-    filename = "data3.json"
-    if os.path.isfile(filename) and os.stat(filename).st_size != 0:
-        with open(filename) as f:
-            d = json.load(f)
-            d.extend(data)
-            # pprint(d)
-            data = d
-
-    with open(filename, "w") as out:
-        json.dump(data, out)
-        print("json file saved: ", filename)
+def write_scalar_summary(writer, tag, value, step):
+    """Helper to manually write a scalar summary to a writer"""
+    summary = tf.Summary(
+        value=[tf.Summary.Value(tag=tag, simple_value=value)])
+    writer.add_summary(summary, step)
 
 
 def setup_embedding_projector(embedding, writer):
@@ -528,29 +428,30 @@ def setup_embedding_projector(embedding, writer):
         writer, config)
 
 
-def make_hparam_str(learning_rate, num_layers, state_size):
+def make_hparam_str(num_layers, state_size):
     """Construct hyperparameter string for our run based on settings
     Example: "lr=1e-2,ca=3,state=64
     """
-    return "lr=%.0e,ca=%d,state=%d" % (learning_rate, num_layers, state_size)
+    return "layers=%d,state=%d" % (num_layers, state_size)
 
 
-def main(argv=None):
+def main(_=None):
     """Runs main script by evaluating if data exists in data directory
     possibly generating new, generates a hparam string and runs training."""
     # Generate dataset of (shape) if none exists in data_dir already
-    maybe_generate_data(
-        DATADIR,
-        shape=FLAGS.grid_shape,
-        stone_probability=0.45,
-        num_examples=FLAGS.num_examples // FLAGS.num_files,
-        num_files=FLAGS.num_files)
+    # maybe_generate_data(
+    #     DATADIR,
+    #     shape=FLAGS.grid_shape,
+    #     stone_probability=0.45,
+    #     num_examples=FLAGS.num_examples // FLAGS.num_files,
+    #     num_files=FLAGS.num_files)
 
     hparam = make_hparam_str(
-        FLAGS.learning_rate, FLAGS.num_layers, FLAGS.state_size)
-    run_path = os.path.join(FLAGS.train_dir, PREFIX, hparam)
+        FLAGS.num_layers, FLAGS.state_size)
+    run_path = os.path.join(
+        FLAGS.train_dir, PREFIX, hparam, "run" + str(FLAGS.run))
 
-    print("Starting run for %s" % hparam)
+    print ("Starting run %d for %s" % (FLAGS.run, hparam))
 
     # Flush run_path for convenience
     if tf.gfile.Exists(run_path):
