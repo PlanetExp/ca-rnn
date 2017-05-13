@@ -58,8 +58,8 @@ class FLAGS(object):
 # PARAMETERS
 # ----------
 # Set number of Cellular Automaton layers to stack.
-FLAGS.num_layers = 10
-FLAGS.state_size = 2
+FLAGS.num_layers = 20
+FLAGS.state_size = 1
 # The run number to save data to
 FLAGS.run = 99
 FLAGS.batch_size = 256

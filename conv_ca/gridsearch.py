@@ -32,7 +32,7 @@ def gridsearch(search):
 
 def main():
     """Set grid search options and start search"""
-    search = {"num_layers": {1, 2, 3},
+    search = {"num_layers": {4, 5, 6},
               "state_size": {1, 2, 3},
               "run": {11, 12, 13}}
     gridsearch(search)

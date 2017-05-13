@@ -9,14 +9,14 @@ from timeit import default_timer as timer
 import os
 import sys
 import random
-from pprint import pprint
+# from pprint import pprint
 # import time
 
 import numpy as np
 import h5py
-import seaborn as sns
-import pandas as pd
-from sklearn.utils import shuffle
+# import seaborn as sns
+# import pandas as pd
+# from sklearn.utils import shuffle
 
 ROWS = 20
 COLS = 20
@@ -282,8 +282,8 @@ def main():
     # plot_histogram(steps[:num_pos], title="Positive examples distribution")
     # plot_histogram(steps[num_pos:], title="Negative examples distribution")
 
-    grids, steps, connection = shuffle(
-        grids, steps, connection, random_state=1234)
+    # grids, steps, connection = shuffle(
+        # grids, steps, connection, random_state=1234)
 
     # print sample to terminal
     sample = random.randint(0, tot_examples - 1)
