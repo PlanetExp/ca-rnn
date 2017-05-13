@@ -58,15 +58,17 @@ class FLAGS(object):
 # PARAMETERS
 # ----------
 # Set number of Cellular Automaton layers to stack.
-FLAGS.num_layers = 1
-FLAGS.state_size = 1
+FLAGS.num_layers = 10
+FLAGS.state_size = 2
 # The run number to save data to
-FLAGS.run = 6
+FLAGS.run = 99
 FLAGS.batch_size = 256
 FLAGS.num_classes = 2
 # Set whether to reuse variables between CA layers or not.
 FLAGS.reuse = True
 FLAGS.learning_rate = 0.1
+# If Leaky ReLU is used, set the rate of the leak
+FLAGS.lrelu_rate = 0.1
 # Percent of dropout to apply to training process
 FLAGS.dropout = 1.0
 # Number of steps before printing logs.
@@ -76,7 +78,7 @@ FLAGS.max_steps = 15000
 # Fraction of dataset to split into test samples
 FLAGS.test_size = 0.2
 # Set epsilon for Adam optimizer
-FLAGS.epsilon = 0.9
+FLAGS.epsilon = 1.0
 # Start a number of threads per processor.
 FLAGS.num_threads = 1
 # Set various directories for files.
@@ -124,7 +126,7 @@ def _add_summaries(wights, bias, act):
 def conv_layer(inputs, kernel,
                initializer=None, name=None, scope=None):
     """Helper to create convolution layer and add summaries"""
-    initializer = initializer or tf.contrib.layers.xavier_initializer()
+    initializer = initializer or tf.contrib.layers.xavier_initializer_conv2d()
     with tf.variable_scope(scope or name):
         wights = tf.get_variable(
             "weights", kernel, initializer=initializer, dtype=tf.float32)
@@ -133,9 +135,18 @@ def conv_layer(inputs, kernel,
         conv = tf.nn.conv2d(inputs, wights,
                             strides=[1, 1, 1, 1],
                             padding="SAME")
-        act = tf.nn.relu(conv + bias)
+        # act = tf.nn.relu(conv + bias)
+        act = lrelu(conv + bias)  # add leaky ReLU
         # _add_summaries(w, b, act)
     return act
+
+
+def lrelu(x, leak=FLAGS.lrelu_rate, name="lrelu"):
+    """Leaky ReLU implementation"""
+    with tf.variable_scope(name):
+        f1 = 0.5 * (1 + leak)
+        f2 = 0.5 * (1 - leak)
+        return f1 * x + f2 * abs(x)
 
 
 def save_activation_snapshot(snap, step, path):
@@ -211,13 +222,23 @@ class ConvCA(object):
         # -----------------
         dropout = tf.nn.dropout(output, keep_prob)
 
-        flattened = tf.reshape(dropout, [-1, WIDTH * HEIGHT])
+        # Force only local updates going forward
+        # select only top row for regression
+        # print (dropout)
+
+        self.debug = output  # debug local activations
+        s = tf.slice(dropout, [0, 0, 0, 0], [-1, 20, 1, 1])
+        # print (s)
+
+        flattened = tf.reshape(s, [-1, WIDTH])
+        # flattened = tf.reshape(dropout, [-1, WIDTH * HEIGHT])
 
         # Softmax linear
         # --------------
         with tf.variable_scope("softmax_linear"):
             weights = tf.get_variable(
-                "weights", [WIDTH * HEIGHT, FLAGS.num_classes],
+                "weights", [WIDTH, FLAGS.num_classes],
+                # "weights", [WIDTH * HEIGHT, FLAGS.num_classes],
                 initializer=tf.contrib.layers.xavier_initializer(),
                 dtype=tf.float32)
             bias = tf.get_variable(
@@ -266,7 +287,7 @@ def conv_ca_model(run_path, args=None):
     sess = tf.Session()
 
     # Load datasets
-    grids, connections = load_hdf5(DATASET)
+    grids, connections, _ = load_hdf5(DATASET)
     grids = grids.reshape((-1, WIDTH, HEIGHT, 1))
     datasets = create_datasets(grids, connections, test_size=0.2)
 
@@ -284,8 +305,10 @@ def conv_ca_model(run_path, args=None):
     with tf.name_scope("test"):
         test = shared_model(inputs_pl, labels_pl, keep_prob, istrain=False)
 
+    # model = ConvCA(inputs_pl, labels_pl, keep_prob)
+
     # Create writer to write summaries to file
-    writer = tf.summary.FileWriter(run_path, sess.graph)
+    writer = tf.summary.FileWriter(run_path)
     writer.add_graph(sess.graph)
 
     # Create op to merge all summaries into one for writing to disk
@@ -313,8 +336,8 @@ def conv_ca_model(run_path, args=None):
             feed_dict = {inputs_pl: train_batch_x,
                          labels_pl: train_batch_y,
                          keep_prob: FLAGS.dropout}
-            _, loss, accuracy = sess.run(
-                [train.optimizer, train.loss, train.prediction], feed_dict)
+            _, loss, accuracy, temp = sess.run(
+                [train.optimizer, train.loss, train.prediction, train.debug], feed_dict)
             accuracies.append(accuracy)
             losses.append(loss)
 
@@ -324,9 +347,33 @@ def conv_ca_model(run_path, args=None):
             feed_dict = {inputs_pl: test_batch_x,
                          labels_pl: test_batch_y,
                          keep_prob: 1.0}
-            test_accuracy, snap = sess.run(
-                [test.prediction, test.activation_snapshot], feed_dict)
+            test_accuracy = sess.run(
+                [test.prediction], feed_dict)
             test_accuracies.append(test_accuracy)
+            #  test_accuracy, snap = sess.run(
+            #     [test.prediction, test.activation_snapshot], feed_dict)
+            # test_accuracies.append(test_accuracy)
+
+            # train
+            # train_batch_x, train_batch_y = datasets.train.next_batch(
+            #     FLAGS.batch_size)
+            # feed_dict = {inputs_pl: train_batch_x,
+            #              labels_pl: train_batch_y,
+            #              keep_prob: FLAGS.dropout}
+            # _, loss, accuracy, temp = sess.run(
+            #     [model.optimizer, model.loss, model.prediction, model.temp], feed_dict)
+            # accuracies.append(accuracy)
+            # losses.append(loss)
+
+            # # test
+            # test_batch_x, test_batch_y = datasets.test.next_batch(
+            #     FLAGS.batch_size, shuffle_data=False)
+            # feed_dict = {inputs_pl: test_batch_x,
+            #              labels_pl: test_batch_y,
+            #              keep_prob: 1.0}
+            # test_accuracy = sess.run(
+            #     [model.prediction], feed_dict)
+            # test_accuracies.append(test_accuracy)
 
             step += 1
 
@@ -339,6 +386,9 @@ def conv_ca_model(run_path, args=None):
             #     writer.add_summary(summary, step)
 
             if step % FLAGS.log_frequency == 0:
+
+                print (temp.shape)
+                print (temp[0].reshape(20,20)[:5, :5])
                 # save_activation_snapshot(snap, step, args[0])
                 current_time = timer()
                 duration = current_time - start_time

@@ -261,11 +261,24 @@ import random
 
 class InputTests(tf.test.TestCase):
 
-    def testGenerator(self):
-        x, y = utils.generate_constrained_dataset((20, 20), 8, stone_probability=0.4)
+    def testSlice(self):
 
-        # pprint(x)
-        pprint(y)
+        sess = tf.InteractiveSession()
+        i = tf.constant(np.arange(18), tf.float32, shape=[2, 3, 3, 1])
+        print(i.eval())
+
+        s = tf.slice(i, [0, 0, 0, 0], [-1, 1, 3, 1])
+        print("*****")
+        print(s.eval())
+
+        sess.close()
+
+
+    # def testGenerator(self):
+    #     x, y = utils.generate_constrained_dataset((20, 20), 8, stone_probability=0.4)
+
+    #     # pprint(x)
+    #     pprint(y)
 
     # def blobs(self):
     #     width = 5

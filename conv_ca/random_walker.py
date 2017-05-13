@@ -9,7 +9,7 @@ from timeit import default_timer as timer
 import os
 import sys
 import random
-# from pprint import pprint
+from pprint import pprint
 # import time
 
 import numpy as np
@@ -210,6 +210,18 @@ def draw_grid(grid):
                 sys.stdout.write("\n")
 
 
+def check_repeats(grids):
+    """Check if the dataset is repeating or not by converting each image
+    to a hashed byte-array, then iterating though the new array and look for
+    duplicates. Each hash should be unique."""
+    from collections import Counter
+    a = [hash(item.data.tobytes()) for item in grids.reshape(-1, ROWS * COLS)]
+    # pprint(a)
+    # print(len(a))
+    b = [item for item, count in Counter(a).items() if count > 1]
+    assert len(b) == 0, "Dataset contains repeats"
+
+
 def load_hdf5(filename):
     """Load a hdf5 file"""
     with h5py.File(filename, "r") as h5file:
@@ -286,4 +298,5 @@ def main():
 
 if __name__ == "__main__":
     # main()
-    load_hdf5("tmp/connectivity.h5")
+    grids, _, _ = load_hdf5("data/20x20/connectivity.h5")
+    check_repeats(grids)
