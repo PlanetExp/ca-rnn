@@ -12,13 +12,13 @@
 
 # params=`sed -n "2 p" input.csv`
 # sed -n '2 p' input.csv
-
-IFS=',' read params <<< `sed -n "13 p" input.csv`
+let INDEX=15+1
+IFS=',' read params <<< `sed -n "$INDEX p" input.csv`
 paramArray=($params)
 
-i=${paramArray[1]}
-j=${paramArray[2]}
-k=${paramArray[3]}
+i=${paramArray[0]}
+j=${paramArray[1]}
+k=${paramArray[2]}
 echo $i
 echo $j
 echo $k
