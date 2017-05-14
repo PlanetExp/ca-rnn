@@ -7,5 +7,6 @@
 source activate tf-cpu
 
 cd $PBS_O_WORKDIR
+cd ..
 
-python3 ../conv_ca.py --num_layers=20 --state_size=2 --run=11
+python3 conv_ca.py --num_layers=20 --state_size=2 --run=11
