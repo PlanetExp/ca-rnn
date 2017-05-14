@@ -209,8 +209,8 @@ def _convert_to_tfrecords(inputs, shape, labels, filepath):
     inputs = inputs.astype(np.int8)
     labels = labels.astype(np.int8)
 
-    for i in range(len(inputs)):
-        features = inputs[i].tobytes()
+    for i, input_ in enumerate(inputs):
+        features = input_.tobytes()
         label = labels[i].tobytes()
 
         # Encode label byte as part of the record

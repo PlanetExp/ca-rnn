@@ -58,7 +58,7 @@ class FLAGS(object):
 # PARAMETERS
 # ----------
 # Set number of Cellular Automaton layers to stack.
-FLAGS.num_layers = 20
+FLAGS.num_layers = 1
 FLAGS.state_size = 1
 # The run number to save data to
 FLAGS.run = 99
@@ -208,7 +208,7 @@ class ConvCA(object):
                     [3, 3, FLAGS.state_size, FLAGS.state_size],
                     scope=scope)
                 state_layers.append(conv_state)
-                self.activation_snapshot.append(conv_state)
+                # self.activation_snapshot.append(conv_state)
 
         # Output module
         # -------------
@@ -226,7 +226,7 @@ class ConvCA(object):
         # select only top row for regression
         # print (dropout)
 
-        self.debug = output  # debug local activations
+        # self.debug = output  # debug local activations
         s = tf.slice(dropout, [0, 0, 0, 0], [-1, 20, 1, 1])
         # print (s)
 
@@ -290,6 +290,7 @@ def conv_ca_model(run_path, args=None):
     grids, connections, _ = load_hdf5(DATASET)
     grids = grids.reshape((-1, WIDTH, HEIGHT, 1))
     datasets = create_datasets(grids, connections, test_size=0.2)
+    # print (datasets.train.num_examples, datasets.test.num_examples)
 
     # Keep probability for dropout layer
     keep_prob = tf.placeholder(tf.float32, name="keep_prob")
@@ -336,8 +337,8 @@ def conv_ca_model(run_path, args=None):
             feed_dict = {inputs_pl: train_batch_x,
                          labels_pl: train_batch_y,
                          keep_prob: FLAGS.dropout}
-            _, loss, accuracy, temp = sess.run(
-                [train.optimizer, train.loss, train.prediction, train.debug], feed_dict)
+            _, loss, accuracy = sess.run(
+                [train.optimizer, train.loss, train.prediction], feed_dict)
             accuracies.append(accuracy)
             losses.append(loss)
 
@@ -387,8 +388,8 @@ def conv_ca_model(run_path, args=None):
 
             if step % FLAGS.log_frequency == 0:
 
-                print (temp.shape)
-                print (temp[0].reshape(20,20)[:5, :5])
+                # print (temp.shape)
+                # print (temp[0].reshape(20,20)[:5, :5])
                 # save_activation_snapshot(snap, step, args[0])
                 current_time = timer()
                 duration = current_time - start_time
@@ -427,7 +428,7 @@ def conv_ca_model(run_path, args=None):
                     (FLAGS.max_steps * FLAGS.batch_size) *
                     (1 - progress) / examples_per_sec)
                 timed = timedelta(seconds=int(estimated_duration))
-                format_str = "Estimated duration: %s (%.1f%%)"
+                format_str = "ETA: %s (%.1f%%)"
                 print (format_str % (str(timed), progress * 100))
 
             if step % 1000 == 0:

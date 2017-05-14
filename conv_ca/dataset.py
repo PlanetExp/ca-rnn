@@ -8,8 +8,8 @@ import math
 # import numpy as np
 from numpy.random import permutation
 from collections import namedtuple
-# from sklearn.utils import shuffle
-# from sklearn.model_selection import train_test_split
+from sklearn.utils import shuffle
+from sklearn.model_selection import train_test_split
 
 Datasets = namedtuple('Datasets', ['train', 'test'])
 
@@ -62,12 +62,12 @@ class Dataset(object):
 
             # Shuffle data
             if shuffle_data:
-                perm = permutation(self._num_examples)
-                self._inputs = self._inputs[perm]
-                self._labels = self._labels[perm]
-                # removed dependency of sklearn for HPC
-                # self._inputs, self._labels = shuffle(
-                    # self._inputs, self._labels, random_state=random_state)
+                # Lazy version below without sklearn dependency
+                # perm = permutation(self._num_examples)
+                # self._inputs = self._inputs[perm]
+                # self._labels = self._labels[perm]
+                self._inputs, self._labels = shuffle(
+                    self._inputs, self._labels, random_state=random_state)
 
             # Start next epoch.
             start = 0
@@ -90,27 +90,27 @@ def create_datasets(inputs, labels, test_size=0.5, random_state=1234):
             datasets objects
     """
 
-    test_split = int(len(inputs) * test_size)
-    inputs_train = inputs[:test_split]
-    labels_train = labels[:test_split]
-    inputs_test = inputs[test_split:]
-    labels_test = labels[test_split:]
+    # test_split = int(len(inputs) * test_size)
+    # inputs_train = inputs[:test_split]
+    # labels_train = labels[:test_split]
+    # inputs_test = inputs[test_split:]
+    # labels_test = labels[test_split:]
 
-    perm = permutation(inputs_train.shape[0])
-    inputs_train = inputs_train[perm]
-    labels_train = labels_train[perm]
-
-    train = Dataset(inputs_train, labels_train)
-    test = Dataset(inputs_test, labels_test)
-    return Datasets(train=train, test=test)
-
-
-    # below sklearn dependant
-    # could implement myself:
-    # https://github.com/scikit-learn/scikit-learn/blob/master/sklearn/model_selection/_split.py
-    # inputs_train, inputs_test, labels_train, labels_test = train_test_split(
-    #     inputs, labels, test_size=test_size, random_state=random_state)
+    # perm = permutation(inputs_train.shape[0])
+    # inputs_train = inputs_train[perm]
+    # labels_train = labels_train[perm]
 
     # train = Dataset(inputs_train, labels_train)
     # test = Dataset(inputs_test, labels_test)
     # return Datasets(train=train, test=test)
+
+
+    # below sklearn dependant
+    # could implement if you got a couple hours to spare:
+    # https://github.com/scikit-learn/scikit-learn/blob/master/sklearn/model_selection/_split.py
+    inputs_train, inputs_test, labels_train, labels_test = train_test_split(
+        inputs, labels, test_size=test_size, random_state=random_state)
+
+    train = Dataset(inputs_train, labels_train)
+    test = Dataset(inputs_test, labels_test)
+    return Datasets(train=train, test=test)
