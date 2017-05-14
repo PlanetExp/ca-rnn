@@ -52,66 +52,71 @@ from random_walker import load_hdf5
 from dataset import create_datasets
 
 
-class FLAGS(object):
-    """Temporary wrapper class for settings"""
-    pass
-
+# Global container and accessor for flags and their values
+FLAGS = tf.app.flags.FLAGS
+# class FLAGS(object):
+#     """Temporary wrapper class for settings"""
+#     pass
 
 # PARAMETERS
 # ----------
-# Set number of Cellular Automaton layers to stack.
-FLAGS.num_layers = 1
-FLAGS.state_size = 1
-# The run number to save data to
-FLAGS.run = 99
-FLAGS.batch_size = 256
-FLAGS.num_classes = 2
+# (flag_name, default_value, doc-string)
+# determine hparam string
+tf.app.flags.DEFINE_integer(
+    "num_layers", 1, "Number of convolution layers to stack.")
+tf.app.flags.DEFINE_integer(
+    "state_size", 1,
+    "Number of depth dimensions for each convolution layer in stack.")
+tf.app.flags.DEFINE_integer(
+    "run", 99, "Set subdirectory number to save logs to.")
+tf.app.flags.DEFINE_integer(
+    "batch_size", 256, "Set batch size per step")
+tf.app.flags.DEFINE_float(
+    "learning_rate", 0.1, "Set learning rate.")
+tf.app.flags.DEFINE_integer(
+    "log_frequency", 100, "Number of steps before printing logs.")
+tf.app.flags.DEFINE_integer(
+    "max_steps", 15000, "Set maximum number of steps to train for")
+tf.app.flags.DEFINE_string(
+    "data_dir", "data", "Directory of the dataset")
+tf.app.flags.DEFINE_string(
+    "train_dir", "tmp/train", "Directory to save train event files")
+tf.app.flags.DEFINE_string(
+    "checkpoint_dir", "tmp/train", "Directory to save checkpoints")
+
+NUM_CLASSES = 2
 # Set whether to reuse variables between CA layers or not.
-FLAGS.reuse = True
-FLAGS.learning_rate = 0.1
+REUSE_VARIABLES = True
 # If Leaky ReLU is used, set the rate of the leak
-FLAGS.lrelu_rate = 0.1
+LRELU_RATE = 0.1
 # Percent of dropout to apply to training process
-FLAGS.dropout = 1.0
-# Number of steps before printing logs.
-FLAGS.log_frequency = 100
-# Set maximum number of steps to train for
-FLAGS.max_steps = 15000
+DROPOUT = 1.0
 # Fraction of dataset to split into test samples
-FLAGS.test_size = 0.2
+TEST_SIZE = 0.2
 # Set epsilon for Adam optimizer
-FLAGS.epsilon = 1.0
+EPSILON = 1.0
 # Start a number of threads per processor.
-FLAGS.num_threads = 1
-# Set various directories for files.
-FLAGS.data_dir = "data"
-FLAGS.train_dir = "tmp/train"
-FLAGS.valid_dir = "tmp/valid"
-FLAGS.checkpoint_dir = "tmp/train"
-# Whether or not to restore checkpoint of training session.
-# If true, then train for an additional amount of steps in max_steps.
-FLAGS.restore = False
+NUM_THREADS = 1
 # Size of grid: tuple of dim (width, height, depth)
-FLAGS.grid_shape = (20, 20, 1)
+GRID_SHAPE = (20, 20, 1)
 # Whether or not to record embeddings for this run
 FLAGS.embedding = False
 # Whether to save image and label data per embedding
-FLAGS.embedding_metadata = False
-FLAGS.num_embeddings = 32
+SAVE_EMBEDDING_METADATA = False
+NUM_EMBEDDINGS = 32
 # Whether to record run metadata (e.g. run times, memory consumption etc.)
 # view these in either Tensorboard or save to json file with a
 # tensorflow.python.client.timeline object and and view a web browser
-FLAGS.run_metadata = False
+SAVE_RUN_METADATA = False
 # Saves snapshots of the layer activations in separate folder
-FLAGS.snapshot = False
-FLAGS.snap_dir = "tmp/snaps"
-# Whether to save run statistics or not (True)
-FLAGS.save_data = True
+SAVE_ACTIVATION_SNAPSHOT = False
+SNAPSHOT_DIR = "tmp/snaps"
+
 
 # Data parameters
-WIDTH = FLAGS.grid_shape[0]
-HEIGHT = FLAGS.grid_shape[1]
-DEPTH = FLAGS.grid_shape[2]
+WIDTH = GRID_SHAPE[0]
+HEIGHT = GRID_SHAPE[1]
+DEPTH = GRID_SHAPE[2]
 PREFIX = str(WIDTH) + "x" + str(HEIGHT)
 DATADIR = os.path.join(FLAGS.data_dir, PREFIX)
 DATASET = os.path.join(FLAGS.data_dir, PREFIX, "connectivity.h5")
@@ -143,7 +148,7 @@ def conv_layer(inputs, kernel,
     return act
 
 
-def lrelu(x, leak=FLAGS.lrelu_rate, name="lrelu"):
+def lrelu(x, leak=LRELU_RATE, name="lrelu"):
     """Leaky ReLU implementation"""
     with tf.variable_scope(name):
         f1 = 0.5 * (1 + leak)
@@ -202,7 +207,7 @@ class ConvCA(object):
             state_layers = [conv1]
             for layer in range(FLAGS.num_layers):
                 # Share weights between layers by marking scope with reuse
-                if FLAGS.reuse and layer > 0:
+                if REUSE_VARIABLES and layer > 0:
                     scope.reuse_variables()
 
                 conv_state = conv_layer(
@@ -239,12 +244,12 @@ class ConvCA(object):
         # --------------
         with tf.variable_scope("softmax_linear"):
             weights = tf.get_variable(
-                "weights", [WIDTH, FLAGS.num_classes],
-                # "weights", [WIDTH * HEIGHT, FLAGS.num_classes],
+                "weights", [WIDTH, NUM_CLASSES],
+                # "weights", [WIDTH * HEIGHT, NUM_CLASSES],
                 initializer=tf.contrib.layers.xavier_initializer(),
                 dtype=tf.float32)
             bias = tf.get_variable(
-                "biases", [FLAGS.num_classes],
+                "biases", [NUM_CLASSES],
                 initializer=tf.zeros_initializer())
             logits = tf.nn.xw_plus_b(flattened, weights, bias)
             # _add_summaries(w, b, logits)
@@ -271,7 +276,7 @@ class ConvCA(object):
             with tf.name_scope("optimizer"):
                 train_step = tf.train.AdamOptimizer(
                     FLAGS.learning_rate, beta1=0.9, beta2=0.999,
-                    epsilon=FLAGS.epsilon).minimize(
+                    epsilon=EPSILON).minimize(
                         cross_entropy)
             self.optimizer = train_step
         else:
@@ -291,7 +296,7 @@ def conv_ca_model(run_path, args=None):
     # Load datasets
     grids, connections, _ = load_hdf5(DATASET)
     grids = grids.reshape((-1, WIDTH, HEIGHT, 1))
-    datasets = create_datasets(grids, connections, test_size=0.2)
+    datasets = create_datasets(grids, connections, test_size=TEST_SIZE)
     # print (datasets.train.num_examples, datasets.test.num_examples)
 
     # Keep probability for dropout layer
@@ -338,7 +343,7 @@ def conv_ca_model(run_path, args=None):
                 FLAGS.batch_size)
             feed_dict = {inputs_pl: train_batch_x,
                          labels_pl: train_batch_y,
-                         keep_prob: FLAGS.dropout}
+                         keep_prob: DROPOUT}
             _, loss, accuracy = sess.run(
                 [train.optimizer, train.loss, train.prediction], feed_dict)
             accuracies.append(accuracy)
@@ -362,7 +367,7 @@ def conv_ca_model(run_path, args=None):
             #     FLAGS.batch_size)
             # feed_dict = {inputs_pl: train_batch_x,
             #              labels_pl: train_batch_y,
-            #              keep_prob: FLAGS.dropout}
+            #              keep_prob: DROPOUT}
             # _, loss, accuracy, temp = sess.run(
             #     [model.optimizer, model.loss, model.prediction, model.temp], feed_dict)
             # accuracies.append(accuracy)
@@ -468,7 +473,7 @@ def setup_embedding_projector(embedding, writer):
     config = tf.contrib.tensorboard.plugins.projector.ProjectorConfig()
     embedding_config = config.embeddings.add()
     embedding_config.tensor_name = embedding.name
-    if FLAGS.embedding_metadata:
+    if SAVE_EMBEDDING_METADATA:
         # Link this tensor to its metadata file (e.g. labels).
         # NOTE: Directory relative to where you start Tensorboard
         embedding_config.sprite.image_path = os.path.join(
@@ -507,13 +512,18 @@ def make_hparam_str(num_layers, state_size):
     return "layers=%d,state=%d" % (num_layers, state_size)
 
 
-def main(_=None):
+def main(argv=None):  # pylint: disable=unused-argument
     """Runs main script by evaluating if data exists in data directory
-    possibly generating new, generates a hparam string and runs training."""
+    possibly generating new, generates a hparam string and runs training.
+
+    Args:
+        argv: 
+            list of command line arguments that is run with the script
+    """
     # Generate dataset of (shape) if none exists in data_dir already
     # maybe_generate_data(
     #     DATADIR,
-    #     shape=FLAGS.grid_shape,
+    #     shape=GRID_SHAPE,
     #     stone_probability=0.45,
     #     num_examples=FLAGS.num_examples // FLAGS.num_files,
     #     num_files=FLAGS.num_files)
@@ -535,8 +545,8 @@ def main(_=None):
     tf.gfile.MakeDirs(run_path)
 
     args = []
-    if FLAGS.snapshot:
-        snap_path = os.path.join(FLAGS.snap_dir, hparam)
+    if SAVE_ACTIVATION_SNAPSHOT:
+        snap_path = os.path.join(SNAPSHOT_DIR, hparam)
         # print(snap_path)
         if tf.gfile.Exists(snap_path):
             tf.gfile.DeleteRecursively(snap_path)
