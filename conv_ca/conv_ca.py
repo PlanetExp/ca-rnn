@@ -35,11 +35,12 @@ Date: 13/4/17
 
 from datetime import datetime, timedelta
 from timeit import default_timer as timer
-from time import time
+# from time import time
 # from pprint import pprint
 
-import csv
-import json
+import sys
+# import csv
+# import json
 import math
 import os
 # import re
@@ -49,6 +50,7 @@ import numpy as np
 from utils import input_pipeline, maybe_generate_data, embedding_metadata
 from random_walker import load_hdf5
 from dataset import create_datasets
+
 
 class FLAGS(object):
     """Temporary wrapper class for settings"""
@@ -440,8 +442,8 @@ def conv_ca_model(run_path, args=None):
         tot_duration = timer() - tot_running_time
         timed = timedelta(seconds=int(tot_duration))
         print ("Total running time: %s" % timed)
-        print ("Layers: %d State dims: %d" %
-            (FLAGS.num_layers, FLAGS.state_size))
+        print ("Layers: %d, State dims: %d, Run: %d" %
+            (FLAGS.num_layers, FLAGS.state_size, FLAGS.run))
 
         writer.close()
         sess.close()
@@ -479,6 +481,25 @@ def setup_embedding_projector(embedding, writer):
         writer, config)
 
 
+class Logger(object):
+    """Logger object that prints both to logfile and to stdout"""
+    def __init__(self):
+        self.terminal = sys.stdout
+        self.log = open("logfile.log", "a")  # equal to .py >> file
+
+    def write(self, message):
+        """writes a message both to terminal and to logfile"""
+        self.terminal.write(message)
+        self.log.write(message)  
+
+    def flush(self):
+        """Handles python3 flush"""
+        #this flush method is needed for python 3 compatibility.
+        #this handles the flush command by doing nothing.
+        #you might want to specify some extra behavior here.
+        pass    
+
+
 def make_hparam_str(num_layers, state_size):
     """Construct hyperparameter string for our run based on settings
     Example: "lr=1e-2,ca=3,state=64
@@ -497,11 +518,15 @@ def main(_=None):
     #     num_examples=FLAGS.num_examples // FLAGS.num_files,
     #     num_files=FLAGS.num_files)
 
+    # enable logging to file with print
+    sys.stdout = Logger()
+
     hparam = make_hparam_str(
         FLAGS.num_layers, FLAGS.state_size)
     run_path = os.path.join(
         FLAGS.train_dir, PREFIX, hparam, "run" + str(FLAGS.run))
 
+    print ("-" * 40 + "\n")
     print ("Starting run %d for %s" % (FLAGS.run, hparam))
 
     # Flush run_path for convenience
