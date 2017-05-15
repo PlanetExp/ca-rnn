@@ -492,7 +492,7 @@ class Logger(object):
     """Logger object that prints both to logfile and to stdout"""
     def __init__(self):
         self.terminal = sys.stdout
-        self.log = open(os.path.join(FLAGS.logfile, ".log"), "a")
+        self.log = open(FLAGS.logfile + ".log", "a")
 
     def write(self, message):
         """writes a message both to terminal and to logfile"""

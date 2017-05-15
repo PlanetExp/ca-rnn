@@ -19,4 +19,4 @@ j=${paramArray[1]}
 k=${paramArray[2]}
 
 cd ..
-python3 conv_ca.py --num_layers=$i --state_size=$j --run=$k --logfile="25_6-35"
+python3 conv_ca.py --num_layers=$i --state_size=$j --run=$k --logfile="25-26_6-35"
