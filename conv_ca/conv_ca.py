@@ -83,6 +83,8 @@ tf.app.flags.DEFINE_string(
     "train_dir", "tmp/train", "Directory to save train event files")
 tf.app.flags.DEFINE_string(
     "checkpoint_dir", "tmp/train", "Directory to save checkpoints")
+tf.app.flags.DEFINE_string(
+    "logfile", "logfile", "Name of logfile")
 
 NUM_CLASSES = 2
 # Set whether to reuse variables between CA layers or not.
@@ -490,7 +492,7 @@ class Logger(object):
     """Logger object that prints both to logfile and to stdout"""
     def __init__(self):
         self.terminal = sys.stdout
-        self.log = open("logfile.log", "a")  # equal to .py >> file
+        self.log = open(os.path.join(FLAGS.logfile, ".log"), "a")
 
     def write(self, message):
         """writes a message both to terminal and to logfile"""
