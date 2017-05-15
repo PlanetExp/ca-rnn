@@ -4,7 +4,7 @@
 #PBS -l walltime=10:00:00
 #PBS -l mem=2gb
 #PBS -l ncpus=1
-#PBS -J 1-30
+#PBS -J 1-60
 
 source activate tf-cpu
 
@@ -19,4 +19,4 @@ j=${paramArray[1]}
 k=${paramArray[2]}
 
 cd ..
-python3 conv_ca.py --num_layers=$i --state_size=$j --run=$k --logfile="25-26_6-35"
+python3 conv_ca.py --num_layers=$i --state_size=$j --run=$k --logfile="26-27_6-35"
