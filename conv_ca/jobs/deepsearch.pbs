@@ -1,17 +1,17 @@
 #!/bin/bash -l
 
 #PBS -N gridsearch
-#PBS -l walltime=10:00:00
+#PBS -l walltime=23:00:00
 #PBS -l mem=2gb
 #PBS -l ncpus=1
-#PBS -J 1-60
+#PBS -J 1-69
 
 source activate tf-cpu
 
 cd $PBS_O_WORKDIR
 
 let INDEX=${PBS_ARRAY_INDEX}+1
-IFS=',' read params <<< `sed -n "$INDEX p" input.csv`
+IFS=',' read params <<< `sed -n "$INDEX p" input_deep.csv`
 paramArray=($params)
 
 i=${paramArray[0]}
@@ -19,4 +19,4 @@ j=${paramArray[1]}
 k=${paramArray[2]}
 
 cd ..
-python3 conv_ca.py --num_layers=$i --state_size=$j --run=$k --logfile="26-27_6-35"
+python3 conv_ca.py --num_layers=$i --state_size=$j --run=$k --logfile="deep"

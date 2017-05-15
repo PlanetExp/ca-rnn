@@ -1,0 +1,22 @@
+#!/bin/bash -l
+
+#PBS -N widesearch
+#PBS -l walltime=8:00:00
+#PBS -l mem=2gb
+#PBS -l ncpus=1
+#PBS -J 1-90
+
+source activate tf-cpu
+
+cd $PBS_O_WORKDIR
+
+let INDEX=${PBS_ARRAY_INDEX}+1
+IFS=',' read params <<< `sed -n "$INDEX p" input_wide.csv`
+paramArray=($params)
+
+i=${paramArray[0]}
+j=${paramArray[1]}
+k=${paramArray[2]}
+
+cd ..
+python3 conv_ca.py --num_layers=$i --state_size=$j --run=$k --logfile="wide"
