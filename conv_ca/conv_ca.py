@@ -63,20 +63,20 @@ FLAGS = tf.app.flags.FLAGS
 # (flag_name, default_value, doc-string)
 # determine hparam string
 tf.app.flags.DEFINE_integer(
-    "num_layers", 1, "Number of convolution layers to stack.")
+    "num_layers", 9, "Number of convolution layers to stack.")
 tf.app.flags.DEFINE_integer(
-    "state_size", 1,
+    "state_size", 3,
     "Number of depth dimensions for each convolution layer in stack.")
 tf.app.flags.DEFINE_integer(
     "run", 99, "Set subdirectory number to save logs to.")
 tf.app.flags.DEFINE_integer(
     "batch_size", 256, "Set batch size per step")
 tf.app.flags.DEFINE_float(
-    "learning_rate", 0.1, "Set learning rate.")
+    "learning_rate", 0.01, "Set learning rate.")
 tf.app.flags.DEFINE_integer(
     "log_frequency", 100, "Number of steps before printing logs.")
 tf.app.flags.DEFINE_integer(
-    "max_steps", 20000, "Set maximum number of steps to train for")
+    "max_steps", 50000, "Set maximum number of steps to train for")
 tf.app.flags.DEFINE_string(
     "data_dir", "data", "Directory of the dataset")
 tf.app.flags.DEFINE_string(
@@ -97,8 +97,6 @@ DROPOUT = 1.0
 TEST_SIZE = 0.2
 # Set epsilon for Adam optimizer
 EPSILON = 1.0
-# Start a number of threads per processor.
-NUM_THREADS = 1
 # Size of grid: tuple of dim (width, height, depth)
 GRID_SHAPE = (20, 20, 1)
 # Whether or not to record embeddings for this run
@@ -140,7 +138,7 @@ def conv_layer(inputs, kernel,
         wights = tf.get_variable(
             "weights", kernel, initializer=initializer, dtype=tf.float32)
         bias = tf.get_variable(
-            "biases", [kernel[3]], initializer=tf.zeros_initializer())
+            "biases", [kernel[3]], initializer=tf.constant_initializer(0.01))
         conv = tf.nn.conv2d(inputs, wights,
                             strides=[1, 1, 1, 1],
                             padding="SAME")
@@ -215,6 +213,7 @@ class ConvCA(object):
                 conv_state = conv_layer(
                     state_layers[-1],
                     [3, 3, FLAGS.state_size, FLAGS.state_size],
+                    initializer=tf.truncated_normal_initializer(stddev=0.1, dtype=tf.float32),
                     scope=scope)
                 state_layers.append(conv_state)
                 # self.activation_snapshot.append(conv_state)
