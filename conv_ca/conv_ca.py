@@ -72,11 +72,11 @@ tf.app.flags.DEFINE_integer(
 tf.app.flags.DEFINE_integer(
     "batch_size", 256, "Set batch size per step")
 tf.app.flags.DEFINE_float(
-    "learning_rate", 0.01, "Set learning rate.")
+    "learning_rate", 0.06, "Set learning rate.")
 tf.app.flags.DEFINE_integer(
     "log_frequency", 100, "Number of steps before printing logs.")
 tf.app.flags.DEFINE_integer(
-    "max_steps", 50000, "Set maximum number of steps to train for")
+    "max_steps", 25000, "Set maximum number of steps to train for")
 tf.app.flags.DEFINE_string(
     "data_dir", "data", "Directory of the dataset")
 tf.app.flags.DEFINE_string(
@@ -90,13 +90,13 @@ NUM_CLASSES = 2
 # Set whether to reuse variables between CA layers or not.
 REUSE_VARIABLES = True
 # If Leaky ReLU is used, set the rate of the leak
-LRELU_RATE = 0.01
+LRELU_RATE = 0.05
 # Percent of dropout to apply to training process
 DROPOUT = 1.0
 # Fraction of dataset to split into test samples
 TEST_SIZE = 0.2
 # Set epsilon for Adam optimizer
-EPSILON = 1.0
+EPSILON = 0.9
 # Size of grid: tuple of dim (width, height, depth)
 GRID_SHAPE = (20, 20, 1)
 # Whether or not to record embeddings for this run
@@ -213,7 +213,7 @@ class ConvCA(object):
                 conv_state = conv_layer(
                     state_layers[-1],
                     [3, 3, FLAGS.state_size, FLAGS.state_size],
-                    initializer=tf.truncated_normal_initializer(stddev=0.1, dtype=tf.float32),
+                    initializer=tf.truncated_normal_initializer(stddev=1.0, dtype=tf.float32),
                     scope=scope)
                 state_layers.append(conv_state)
                 # self.activation_snapshot.append(conv_state)
@@ -308,13 +308,13 @@ def conv_ca_model(run_path, args=None):
 
     # Make a template out of model to create two models that
     # share the same graph and variables
-    shared_model = tf.make_template("model", ConvCA)
-    with tf.name_scope("train"):
-        train = shared_model(inputs_pl, labels_pl, keep_prob)
-    with tf.name_scope("test"):
-        test = shared_model(inputs_pl, labels_pl, keep_prob, istrain=False)
+    # shared_model = tf.make_template("model", ConvCA)
+    # with tf.name_scope("train"):
+    #     train = shared_model(inputs_pl, labels_pl, keep_prob)
+    # with tf.name_scope("test"):
+    #     test = shared_model(inputs_pl, labels_pl, keep_prob, istrain=False)
 
-    # model = ConvCA(inputs_pl, labels_pl, keep_prob)
+    model = ConvCA(inputs_pl, labels_pl, keep_prob)
 
     # Create writer to write summaries to file
     writer = tf.summary.FileWriter(run_path)
@@ -340,37 +340,13 @@ def conv_ca_model(run_path, args=None):
         losses = []
         while step <= FLAGS.max_steps:
             # training
-            train_batch_x, train_batch_y = datasets.train.next_batch(
-                FLAGS.batch_size)
-            feed_dict = {inputs_pl: train_batch_x,
-                         labels_pl: train_batch_y,
-                         keep_prob: DROPOUT}
-            _, loss, accuracy = sess.run(
-                [train.optimizer, train.loss, train.prediction], feed_dict)
-            accuracies.append(accuracy)
-            losses.append(loss)
-
-            # test
-            test_batch_x, test_batch_y = datasets.test.next_batch(
-                FLAGS.batch_size, shuffle_data=False)
-            feed_dict = {inputs_pl: test_batch_x,
-                         labels_pl: test_batch_y,
-                         keep_prob: 1.0}
-            test_accuracy = sess.run(
-                [test.prediction], feed_dict)
-            test_accuracies.append(test_accuracy)
-            #  test_accuracy, snap = sess.run(
-            #     [test.prediction, test.activation_snapshot], feed_dict)
-            # test_accuracies.append(test_accuracy)
-
-            # train
             # train_batch_x, train_batch_y = datasets.train.next_batch(
             #     FLAGS.batch_size)
             # feed_dict = {inputs_pl: train_batch_x,
             #              labels_pl: train_batch_y,
             #              keep_prob: DROPOUT}
-            # _, loss, accuracy, temp = sess.run(
-            #     [model.optimizer, model.loss, model.prediction, model.temp], feed_dict)
+            # _, loss, accuracy = sess.run(
+            #     [train.optimizer, train.loss, train.prediction], feed_dict)
             # accuracies.append(accuracy)
             # losses.append(loss)
 
@@ -381,8 +357,32 @@ def conv_ca_model(run_path, args=None):
             #              labels_pl: test_batch_y,
             #              keep_prob: 1.0}
             # test_accuracy = sess.run(
-            #     [model.prediction], feed_dict)
+            #     [test.prediction], feed_dict)
             # test_accuracies.append(test_accuracy)
+            # test_accuracy, snap = sess.run(
+            #     [test.prediction, test.activation_snapshot], feed_dict)
+            # test_accuracies.append(test_accuracy)
+
+            # train
+            train_batch_x, train_batch_y = datasets.train.next_batch(
+                FLAGS.batch_size)
+            feed_dict = {inputs_pl: train_batch_x,
+                         labels_pl: train_batch_y,
+                         keep_prob: DROPOUT}
+            _, loss, accuracy = sess.run(
+                [model.optimizer, model.loss, model.prediction], feed_dict)
+            accuracies.append(accuracy)
+            losses.append(loss)
+
+            # test
+            test_batch_x, test_batch_y = datasets.test.next_batch(
+                FLAGS.batch_size, shuffle_data=False)
+            feed_dict = {inputs_pl: test_batch_x,
+                         labels_pl: test_batch_y,
+                         keep_prob: 1.0}
+            test_accuracy = sess.run(
+                [model.prediction], feed_dict)
+            test_accuracies.append(test_accuracy)
 
             step += 1
 
@@ -448,8 +448,8 @@ def conv_ca_model(run_path, args=None):
         tot_duration = timer() - tot_running_time
         timed = timedelta(seconds=int(tot_duration))
         print ("Total running time: %s" % timed)
-        print ("Layers: %d, State dims: %d, Run: %d" %
-            (FLAGS.num_layers, FLAGS.state_size, FLAGS.run))
+        print ("Layers: %d, State dims: %d, Run: %d, lr: %.0e" %
+            (FLAGS.num_layers, FLAGS.state_size, FLAGS.run, FLAGS.learning_rate))
 
         writer.close()
         sess.close()
@@ -510,7 +510,7 @@ def make_hparam_str(num_layers, state_size):
     """Construct hyperparameter string for our run based on settings
     Example: "lr=1e-2,ca=3,state=64
     """
-    return "layers=%d,state=%d" % (num_layers, state_size)
+    return "lr=%.0e,layers=%d,state=%d" % (FLAGS.learning_rate, num_layers, state_size)
 
 
 def main(argv=None):  # pylint: disable=unused-argument
