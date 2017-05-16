@@ -264,12 +264,17 @@ class InputTests(tf.test.TestCase):
     def testSlice(self):
 
         sess = tf.InteractiveSession()
-        i = tf.constant(np.arange(18), tf.float32, shape=[2, 3, 3, 1])
-        print(i.eval())
+        x = tf.constant(np.arange(18), tf.float32, shape=[2, 3, 3])
+        print(x.eval())
 
-        s = tf.slice(i, [0, 0, 0, 0], [-1, 1, 3, 1])
+        # s = tf.slice(i, [0, 0, 0, 0], [-1, 1, 3, 1])
+        # s = tf.gather(i, [0, 0, 0, 0])
+        idx = tf.constant([[[2]]])
+        idx_flattened = tf.range(0, x.shape[0] * x.shape[1]) * x.shape[2] + idx
+        y = tf.gather(tf.reshape(x, [-1]),  # flatten input
+                      idx_flattened)  # use flattened indices
         print("*****")
-        print(s.eval())
+        print(y.eval())
 
         sess.close()
 

@@ -1,10 +1,10 @@
 #!/bin/bash -l
 
 #PBS -N widesearch
-#PBS -l walltime=8:00:00
-#PBS -l mem=2gb
+#PBS -l walltime=15:00:00
+#PBS -l mem=1gb
 #PBS -l ncpus=1
-#PBS -J 1-90
+#PBS -J 1-99
 
 source activate tf-cpu
 
@@ -19,4 +19,4 @@ j=${paramArray[1]}
 k=${paramArray[2]}
 
 cd ..
-python3 conv_ca.py --num_layers=$i --state_size=$j --run=$k --logfile="wide"
+python3 conv_ca.py --num_layers=$i --state_size=$j --run=$k --max_steps=25000 --logfile="wide2"

@@ -76,7 +76,7 @@ tf.app.flags.DEFINE_float(
 tf.app.flags.DEFINE_integer(
     "log_frequency", 100, "Number of steps before printing logs.")
 tf.app.flags.DEFINE_integer(
-    "max_steps", 15000, "Set maximum number of steps to train for")
+    "max_steps", 20000, "Set maximum number of steps to train for")
 tf.app.flags.DEFINE_string(
     "data_dir", "data", "Directory of the dataset")
 tf.app.flags.DEFINE_string(
@@ -90,7 +90,7 @@ NUM_CLASSES = 2
 # Set whether to reuse variables between CA layers or not.
 REUSE_VARIABLES = True
 # If Leaky ReLU is used, set the rate of the leak
-LRELU_RATE = 0.1
+LRELU_RATE = 0.01
 # Percent of dropout to apply to training process
 DROPOUT = 1.0
 # Fraction of dataset to split into test samples
