@@ -1,0 +1,22 @@
+#!/bin/bash -l
+
+#PBS -N deepsearch
+#PBS -l walltime=23:00:00
+#PBS -l mem=2gb
+#PBS -l ncpus=1
+#PBS -J 1-69
+
+source activate tf-cpu
+
+cd $PBS_O_WORKDIR
+
+let INDEX=${PBS_ARRAY_INDEX}+1
+IFS=',' read params <<< `sed -n "$INDEX p" input_deep.csv`
+paramArray=($params)
+
+i=${paramArray[0]}
+j=${paramArray[1]}
+k=${paramArray[2]}
+
+cd ..
+python3 conv_ca.py --num_layers=$i --state_size=$j --run=$k --logfile="deep"
