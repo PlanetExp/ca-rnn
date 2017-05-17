@@ -1,0 +1,22 @@
+#!/bin/bash -l
+
+#PBS -N narrow4
+#PBS -l walltime=20:00:00
+#PBS -l mem=1gb
+#PBS -l ncpus=1
+#PBS -J 1-64
+
+source activate tf-cpu
+
+cd $PBS_O_WORKDIR
+
+let INDEX=${PBS_ARRAY_INDEX}+1
+IFS=',' read params <<< `sed -n "$INDEX p" narrow4.csv`
+paramArray=($params)
+
+i=${paramArray[0]}
+j=${paramArray[1]}
+k=${paramArray[2]}
+
+cd ..
+python3 conv_ca.py --num_layers=$i --state_size=$j --run=$k --max_steps=40000 --logfile="narrow4"

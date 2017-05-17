@@ -223,7 +223,13 @@ def check_repeats(grids):
 
 
 def load_hdf5(filename):
-    """Load a hdf5 file"""
+    """Load a hdf5 file
+    Args: 
+        filename: filename to load data
+        
+    Returns:
+        grids, connections, steps: tuple
+    """
     with h5py.File(filename, "r") as h5file:
         grids = h5file["grids"]
         steps = h5file["steps"]

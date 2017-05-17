@@ -35,15 +35,10 @@ Date: 13/4/17
 
 from datetime import datetime, timedelta
 from timeit import default_timer as timer
-# from time import time
-# from pprint import pprint
 
 import sys
-# import csv
-# import json
 import math
 import os
-# import re
 
 import tensorflow as tf
 import numpy as np
@@ -54,9 +49,6 @@ from dataset import create_datasets
 
 # Global container and accessor for flags and their values
 FLAGS = tf.app.flags.FLAGS
-# class FLAGS(object):
-#     """Temporary wrapper class for settings"""
-#     pass
 
 # PARAMETERS
 # ----------
@@ -72,11 +64,11 @@ tf.app.flags.DEFINE_integer(
 tf.app.flags.DEFINE_integer(
     "batch_size", 256, "Set batch size per step")
 tf.app.flags.DEFINE_float(
-    "learning_rate", 0.06, "Set learning rate.")
+    "learning_rate", 0.04, "Set learning rate.")
 tf.app.flags.DEFINE_integer(
     "log_frequency", 100, "Number of steps before printing logs.")
 tf.app.flags.DEFINE_integer(
-    "max_steps", 25000, "Set maximum number of steps to train for")
+    "max_steps", 15000, "Set maximum number of steps to train for")
 tf.app.flags.DEFINE_string(
     "data_dir", "data", "Directory of the dataset")
 tf.app.flags.DEFINE_string(
@@ -85,12 +77,15 @@ tf.app.flags.DEFINE_string(
     "checkpoint_dir", "tmp/train", "Directory to save checkpoints")
 tf.app.flags.DEFINE_string(
     "logfile", "logfile", "Name of logfile")
+tf.app.flags.DEFINE_boolean(
+    "load_checkoint", True,
+    "Whether or not to load checkpoint and continue training from last step.")
 
 NUM_CLASSES = 2
 # Set whether to reuse variables between CA layers or not.
 REUSE_VARIABLES = True
 # If Leaky ReLU is used, set the rate of the leak
-LRELU_RATE = 0.05
+LRELU_RATE = 0.04
 # Percent of dropout to apply to training process
 DROPOUT = 1.0
 # Fraction of dataset to split into test samples
@@ -111,7 +106,6 @@ SAVE_RUN_METADATA = False
 # Saves snapshots of the layer activations in separate folder
 SAVE_ACTIVATION_SNAPSHOT = False
 SNAPSHOT_DIR = "tmp/snaps"
-
 
 # Data parameters
 WIDTH = GRID_SHAPE[0]
@@ -201,7 +195,7 @@ class ConvCA(object):
 
         # Cellular Automaton module
         # -------------------------
-        self.activation_snapshot = []
+        # self.activation_snapshot = []
         with tf.variable_scope("ca_conv") as scope:
             # List of all layer states
             state_layers = [conv1]
@@ -235,10 +229,10 @@ class ConvCA(object):
         # print (dropout)
 
         # self.debug = output  # debug local activations
-        s = tf.slice(dropout, [0, 0, 0, 0], [-1, 20, 1, 1])
+        sliced = tf.slice(dropout, [0, 0, 0, 0], [-1, 20, 1, 1])
         # print (s)
 
-        flattened = tf.reshape(s, [-1, WIDTH])
+        flattened = tf.reshape(sliced, [-1, WIDTH])
         # flattened = tf.reshape(dropout, [-1, WIDTH * HEIGHT])
 
         # Softmax linear
@@ -327,9 +321,29 @@ def conv_ca_model(run_path, args=None):
     saver = tf.train.Saver()
     filename = os.path.join(run_path, "train.ckpt")
 
-    sess.run(tf.global_variables_initializer())
-
     step = 0
+    # Continue training and evaluation session from previous run
+    if FLAGS.load_checkoint:
+        ckpt = tf.train.get_checkpoint_state(run_path)
+        if ckpt and ckpt.model_checkpoint_path:
+            saver.restore(sess, ckpt.model_checkpoint_path)
+
+            # take global_step from the checkpoint file path
+            step = ckpt.model_checkpoint_path.split('/')[-1].split('-')[-1]
+            step = int(step)
+            # Extend the max steps with new steps
+            FLAGS.max_steps += step
+            print ("Loading weights from checkpoint at step %d" % step)
+        else:
+            print ("No checkpoint file found")
+            print ("Starting new run.")
+            _flush_directory(run_path)
+            sess.run(tf.global_variables_initializer())
+            # return
+    else:
+        # Otherwise initialize a new session
+        sess.run(tf.global_variables_initializer())
+
     start_time = timer()
     tot_running_time = start_time
     try:
@@ -443,7 +457,9 @@ def conv_ca_model(run_path, args=None):
                 # Save the model periodically
                 saver.save(sess, filename, global_step=step)
     finally:
-        saver.save(sess, filename, global_step=step)
+        # Save run if stopped before max_steps
+        if step != FLAGS.max_steps:
+            saver.save(sess, filename, global_step=step)
 
         tot_duration = timer() - tot_running_time
         timed = timedelta(seconds=int(tot_duration))
@@ -513,6 +529,13 @@ def make_hparam_str(num_layers, state_size):
     return "lr=%.0e,layers=%d,state=%d" % (FLAGS.learning_rate, num_layers, state_size)
 
 
+def _flush_directory(directory):
+    """Helper function to clean directories"""
+    if tf.gfile.Exists(directory):
+        tf.gfile.DeleteRecursively(directory)
+    tf.gfile.MakeDirs(directory)
+
+
 def main(argv=None):  # pylint: disable=unused-argument
     """Runs main script by evaluating if data exists in data directory
     possibly generating new, generates a hparam string and runs training.
@@ -541,17 +564,14 @@ def main(argv=None):  # pylint: disable=unused-argument
     print ("Starting run %d for %s" % (FLAGS.run, hparam))
 
     # Flush run_path for convenience
-    if tf.gfile.Exists(run_path):
-        tf.gfile.DeleteRecursively(run_path)
-    tf.gfile.MakeDirs(run_path)
+    if not FLAGS.load_checkoint:
+        _flush_directory(run_path)
 
     args = []
     if SAVE_ACTIVATION_SNAPSHOT:
         snap_path = os.path.join(SNAPSHOT_DIR, hparam)
         # print(snap_path)
-        if tf.gfile.Exists(snap_path):
-            tf.gfile.DeleteRecursively(snap_path)
-        tf.gfile.MakeDirs(snap_path)
+        _flush_directory(snap_path)
         args.append(snap_path)
 
     # run training
