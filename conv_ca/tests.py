@@ -11,13 +11,279 @@ import random
 # from StringIO import StringIO
 
 
+
+
+
+# def conv_ca_model(run_path, args=None):
+#     """Links inputs and starts a training session and
+#     performs logging at certain steps."""
+
+#     tf.reset_default_graph()
+#     sess = tf.Session()
+
+#     # INPUTS
+#     # ------
+
+#     with tf.name_scope("inputs"):
+#         # inputs, labels = input_pipeline(
+#         #     DATADIR, FLAGS.batch_size,
+#         #     shape=FLAGS.grid_shape,
+#         #     num_threads=FLAGS.num_threads, istrain=True, name="train_pipe")
+
+#         # inputs_valid, labels_valid = input_pipeline(
+#         #     DATADIR, FLAGS.batch_size,
+#         #     shape=FLAGS.grid_shape,
+#         #     num_threads=FLAGS.num_threads, istrain=False, name="valid_pipe")
+
+#         # Keep probability for dropout layer
+#         keep_prob = tf.placeholder(tf.float32, name="keep_prob")
+#         inputs_pl = tf.placeholder(
+#             tf.float32, shape=[None, WIDTH, HEIGHT, DEPTH], name="inputs")
+#         labels_pl = tf.placeholder(tf.int32, shape=[None], name="labels")
+
+#     # GRAPH
+#     # -----
+
+#     # Make a template out of model to create two models that share the same graph
+#     # and variables
+#     shared_model = tf.make_template("model", ConvCA)
+#     with tf.name_scope("train"):
+#         train = shared_model(inputs_pl, labels_pl, keep_prob)
+#     with tf.name_scope("valid"):
+#         valid = shared_model(inputs_pl, labels_pl, keep_prob, istrain=False)
+
+#     # Create writer to write summaries to file
+#     writer = tf.summary.FileWriter(run_path, sess.graph)
+#     writer.add_graph(sess.graph)
+
+#     # EMBEDDING
+#     # ---------
+
+#     # This embedding attemps to reduce a batch of dimensions of the grid into a
+#     # single point so that a single point represent a single grid that can be
+#     # plotted into a 2/3 dimensinoal space with t-SNE.
+#     if FLAGS.embedding:
+#         embedding = tf.Variable(tf.zeros([FLAGS.num_embeddings,
+#                                           valid.embedding_size]),
+#                                 name="embedding")
+#         assignment = embedding.assign(valid.embedding_input)
+#         x_embedding, y_embedding = embedding_metadata(
+#             DATADIR, FLAGS.grid_shape, FLAGS.num_embeddings)
+#         setup_embedding_projector(embedding, writer)
+
+#     # REST OF GRAPH
+#     # -------------
+
+#     # Create op to merge all summaries into one for writing to disk
+#     merged_summary = tf.summary.merge_all()
+
+#     # Save checkpoints for evaluations
+#     saver = tf.train.Saver()
+#     filename = os.path.join(run_path, "train.ckpt")
+
+#     sess.run(tf.global_variables_initializer())
+
+#     # RUN
+#     # ---
+
+#     # Create coordinator and start all threads from input_pipeline
+#     # The queue will feed our model with data, so no placeholders are necessary
+#     coord = tf.train.Coordinator()
+
+#     step = 0
+#     epoch = 0
+#     start_time = time()
+#     tot_running_time = start_time
+#     try:
+#         threads = tf.train.start_queue_runners(sess=sess, coord=coord)
+
+#         # fetch embedding images for t-SNE visualization
+#         # x_embedding_batch, y_embedding_batch = sess.run([x_embedding,
+#         # y_embedding])
+
+#         # Training loop
+#         # -------------
+
+#         # Training loop runs until coordinator have got a requested to stop
+#         tot_accuracy = 0.0
+#         tot_valid_accuracy = 0.0
+#         accuracies = []
+#         accuracies_valid = []
+#         while not coord.should_stop():
+#             # training
+#             x_batch, y_batch = sess.run([inputs, labels])
+#             feed_dict = {inputs_pl: x_batch,
+#                          labels_pl: y_batch, keep_prob: FLAGS.dropout}
+#             _, loss, accuracy = sess.run(
+#                 [train.optimizer, train.loss, train.prediction], feed_dict)
+
+#             # validation
+#             x_batch, y_batch = sess.run([inputs_valid, labels_valid])
+#             feed_dict = {inputs_pl: x_batch,
+#                          labels_pl: y_batch, keep_prob: 1.0}
+#             valid_accuracy, snap = sess.run(
+#                 [valid.prediction, valid.activation_snapshot], feed_dict)
+
+#             tot_accuracy += accuracy
+#             tot_valid_accuracy += valid_accuracy
+#             step += 1
+
+#             # logging
+#             # -------
+
+#             if step % 10 == 0:
+#                 summary = sess.run(merged_summary, feed_dict)
+#                 writer.add_summary(summary, step)
+#             elif step % 500 == 499:
+#                 if FLAGS.run_metadata:
+#                     # Optionally write run metadata into the checkoint file,
+#                     # such as resource usage, memory consumption runtimes etc.
+#                     run_options = tf.RunOptions(
+#                         trace_level=tf.RunOptions.FULL_TRACE)
+#                     run_metadata = tf.RunMetadata()
+#                     summary = sess.run(
+#                         merged_summary, feed_dict, run_options, run_metadata)
+#                     writer.add_run_metadata(run_metadata, "step%d" % step)
+#                     writer.add_summary(summary, step)
+
+#                     # Create the Timeline object, and write it to a json
+#                     # tl = tf.python.client.timeline.Timeline(run_metadata.step_stats)
+#                     # ctf = tl.generate_chrome_trace_format()
+#                     # with open("timeline.json", "w") as f:
+#                     #     f.write(ctf)
+
+#             # Request to close threads and stop at max_steps
+#             if FLAGS.max_steps == step:
+#                 coord.request_stop()
+
+#             if step % FLAGS.log_frequency == 0:
+#                 save_activation_snapshot(snap, step, args[0])
+#                 current_time = time()
+#                 duration = current_time - start_time
+#                 start_time = current_time
+
+#                 avg_accuracy = tot_accuracy / FLAGS.log_frequency
+#                 avg_accuracy_valid = tot_valid_accuracy / FLAGS.log_frequency
+#                 tot_accuracy = 0.0
+#                 tot_valid_accuracy = 0.0
+
+#                 # save logs of [[wall time, step, avg_accuracy]]
+#                 accuracies.append([time(), step, avg_accuracy])
+#                 accuracies_valid.append([time(), step, avg_accuracy])
+
+#                 if avg_accuracy_valid > FLAGS.max_valid_accuracy:
+#                     coord.request_stop()
+
+#                 tag = "avg_accuracy/train"
+#                 value = avg_accuracy
+#                 s = tf.Summary(
+#                     value=[tf.Summary.Value(tag=tag, simple_value=value)])
+#                 writer.add_summary(s, step)
+
+#                 tag = "avg_accuracy/valid"
+#                 value = avg_accuracy_valid
+#                 s = tf.Summary(
+#                     value=[tf.Summary.Value(tag=tag, simple_value=value)])
+#                 writer.add_summary(s, step)
+
+#                 epoch += FLAGS.batch_size * FLAGS.log_frequency / FLAGS.num_examples
+#                 examples_per_sec = FLAGS.log_frequency * FLAGS.batch_size / duration
+#                 sec_per_batch = float(duration / FLAGS.log_frequency)
+#                 format_str = ("%s step %d/%d, epoch %.2f, loss: %.4f, avg. accuracy: %.4f (%.4f) "
+#                               "(%.1fex/s; %.3fs/batch)")
+#                 print(format_str % (datetime.now().strftime("%m/%d %H:%M:%S"),
+#                                     step, FLAGS.max_steps, epoch, loss, avg_accuracy, avg_accuracy_valid,
+#                                     examples_per_sec, sec_per_batch))
+
+#                 progress = float(step / FLAGS.max_steps)
+#                 estimated_duration = (
+#                     FLAGS.max_steps * FLAGS.batch_size) * (1 - progress) / examples_per_sec
+#                 t = timedelta(seconds=int(estimated_duration))
+#                 format_str = "Estimated duration: %s (%.1f%%)"
+#                 print(format_str % (str(t), progress * 100))
+
+#             if step % 500 == 0:
+#                 if FLAGS.embedding:
+#                     # Assign embeddings to variable
+#                     feed_dict = {inputs_pl: x_embedding,
+#                                  labels_pl: y_embedding, keep_prob: 1.0}
+#                     sess.run(assignment, feed_dict)
+
+#                 # Save the model once on a while
+#                 saver.save(sess, filename, global_step=step)
+
+#     except Exception as e:
+#         coord.request_stop(e)
+#     finally:
+
+#         # SAVE AND REPORT
+#         # ---------------
+
+#         save_path = saver.save(sess, filename, global_step=step)
+#         print("Model saved in file: %s" % save_path)
+
+#         coord.request_stop()
+#         # Wait for threads to finish
+#         coord.join(threads)
+
+#         # Print some last stats
+#         tot_duration = time() - tot_running_time
+#         t = timedelta(seconds=int(tot_duration))
+#         print("Total running time: %s" % t)
+#         print("Layers: %d State dims: %d" %
+#               (FLAGS.num_layers, FLAGS.state_size))
+
+#         writer.close()
+#         sess.close()
+#         # report some stats so gridsearch can save them
+
+#         if FLAGS.save_data:
+#             dump = [{
+#                 "timestamp": "%s" % datetime.now(),
+#                 "runtime": "%s" % t,
+#                 "training": accuracies,
+#                 "validation": accuracies_valid,
+#                 "batch_size": FLAGS.batch_size,
+#                 "learning_rate": FLAGS.learning_rate,
+#                 "layers": FLAGS.num_layers,
+#                 "state_size": FLAGS.state_size,
+#                 "num_examples": FLAGS.num_examples,
+#                 "epochs": epoch,
+#                 "dropout": FLAGS.dropout
+#             }]
+#             save_json(dump)
+
+
+
+
+
+
+
 class InputTests(tf.test.TestCase):
 
-    def testGenerator(self):
-        x, y = utils.generate_constrained_dataset((20, 20), 8, stone_probability=0.4)
+    def testSlice(self):
 
-        # pprint(x)
-        pprint(y)
+        sess = tf.InteractiveSession()
+        x = tf.constant(np.arange(18), tf.float32, shape=[2, 3, 3])
+        print(x.eval())
+
+        # s = tf.slice(i, [0, 0, 0, 0], [-1, 1, 3, 1])
+        # s = tf.gather(i, [0, 0, 0, 0])
+        idx = tf.constant([[[2]]])
+        idx_flattened = tf.range(0, x.shape[0] * x.shape[1]) * x.shape[2] + idx
+        y = tf.gather(tf.reshape(x, [-1]),  # flatten input
+                      idx_flattened)  # use flattened indices
+        print("*****")
+        print(y.eval())
+
+        sess.close()
+
+
+    # def testGenerator(self):
+    #     x, y = utils.generate_constrained_dataset((20, 20), 8, stone_probability=0.4)
+
+    #     # pprint(x)
+    #     pprint(y)
 
     # def blobs(self):
     #     width = 5

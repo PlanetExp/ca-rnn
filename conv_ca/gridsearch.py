@@ -1,30 +1,30 @@
-"""File that grid searches model for certain parameters"""
+"""Grid search parameter sweep
 
-import conv_ca
+version 2
+    using parameters and os.system
+"""
 
-s = {"num_layers": {1, 2},
-     "state_size": {3, 4}}
-
-
-def fn(f, v):
-    if f == "num_layers":
-        conv_ca.FLAGS.num_layers = v
-    elif f == "state_size":
-        conv_ca.FLAGS.state_size = v
-    elif f == "max_steps":
-        conv_ca.FLAGS.max_steps = v
+import os
 
 
-try:
-    fn("max_steps", 50000)
-    fn("num_layers", 6)
-    fn("state_size", 3)
-    conv_ca.main()
-    fn("num_layers", 5)
-    conv_ca.main()
-    fn("num_layers", 6)
-    conv_ca.main()
-    fn("num_layers", 7)
-    conv_ca.main()
-finally:
+def gridsearch(search):
+    """Perform a grid-search on a different script"""
+
+    for i in search["num_layers"]:
+        for j in search["state_size"]:
+            for k in search["run"]:
+                args = "--num_layers=%d --state_size=%d --run=%d" % (i, j, k)
+                os.system("python conv_ca.py " + args)
+
     print("grid search complete")
+
+
+def main():
+    """Set grid search options and start search"""
+    search = {"num_layers": {1},
+              "state_size": {1},
+              "run": {99, 98}}
+    gridsearch(search)
+
+if __name__ == '__main__':
+    main()
