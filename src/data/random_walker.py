@@ -233,22 +233,22 @@ def check_repeats(grids):
     print ("No repeats found out of %d samples." % grids.shape[0])
 
 
-def load_hdf5(filename):
-    """Load a hdf5 file
-    Args:
-        filename: filename to load data
+# def load_hdf5(filename):
+#     """Load a hdf5 file
+#     Args:
+#         filename: filename to load data
 
-    Returns:
-        grids, connections, steps: tuple
-    """
-    with h5py.File(filename, "r") as h5file:
-        grids = h5file["grids"]
-        steps = h5file["steps"]
-        connections = h5file["connection"]
+#     Returns:
+#         grids, connections, steps: tuple
+#     """
+#     with h5py.File(filename, "r") as h5file:
+#         grids = h5file["grids"]
+#         steps = h5file["steps"]
+#         connections = h5file["connection"]
 
-        # print (grids.shape, connections.shape)
+#         # print (grids.shape, connections.shape)
 
-        return grids[:], connections[:], steps[:]
+#         return grids[:], connections[:], steps[:]
 
 
 def save_hdf5(grids, steps, connection, filename):
@@ -337,6 +337,6 @@ def main():
 
 
 if __name__ == "__main__":
-    # main()
-    grids, _, _ = load_hdf5("data/connectivity_8x8.h5")
-    check_repeats(grids)
+    main()
+    # grids, _, _ = load_hdf5("data/connectivity_8x8.h5")
+    # check_repeats(grids)
