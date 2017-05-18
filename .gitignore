@@ -1,4 +1,4 @@
-led / optimized / DLL files
+# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
@@ -93,7 +93,5 @@ ENV/
 # Mac specific
 .DS_Store
 
-# Project specific
-tmp/
-results/
-data/
+# exclude data from source control by default
+/data/
