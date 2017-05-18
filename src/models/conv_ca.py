@@ -42,9 +42,8 @@ import os
 
 import tensorflow as tf
 import numpy as np
-from utils import input_pipeline, maybe_generate_data, embedding_metadata
-from random_walker import load_hdf5
-from dataset import create_datasets
+from utils import embedding_metadata
+from dataset import load_hdf5, create_datasets
 
 
 # Global container and accessor for flags and their values
@@ -68,24 +67,24 @@ tf.app.flags.DEFINE_float(
 tf.app.flags.DEFINE_integer(
     "log_frequency", 100, "Number of steps before printing logs.")
 tf.app.flags.DEFINE_integer(
-    "max_steps", 15000, "Set maximum number of steps to train for")
+    "max_steps", 30000, "Set maximum number of steps to train for")
 tf.app.flags.DEFINE_string(
-    "data_dir", "data", "Directory of the dataset")
+    "data_dir", "../../data", "Directory of the dataset")
 tf.app.flags.DEFINE_string(
-    "train_dir", "tmp/train", "Directory to save train event files")
+    "train_dir", "../../../results/train", "Directory to save train event files")
 tf.app.flags.DEFINE_string(
-    "checkpoint_dir", "tmp/train", "Directory to save checkpoints")
+    "checkpoint_dir", "../../../results/train", "Directory to save checkpoints")
 tf.app.flags.DEFINE_string(
     "logfile", "logfile", "Name of logfile")
 tf.app.flags.DEFINE_boolean(
-    "load_checkoint", False,
+    "load_checkoint", True,
     "Whether or not to load checkpoint and continue training from last step.")
 
 NUM_CLASSES = 2
 # Set whether to reuse variables between CA layers or not.
 REUSE_VARIABLES = True
 # If Leaky ReLU is used, set the rate of the leak
-LRELU_RATE = 0.04
+LRELU_RATE = 0.02
 # Percent of dropout to apply to training process
 DROPOUT = 1.0
 # Fraction of dataset to split into test samples
@@ -93,7 +92,7 @@ TEST_SIZE = 0.2
 # Set epsilon for Adam optimizer
 EPSILON = 0.9
 # Size of grid: tuple of dim (width, height, depth)
-GRID_SHAPE = (20, 20, 1)
+GRID_SHAPE = (8, 8, 1)
 # Whether or not to record embeddings for this run
 FLAGS.embedding = False
 # Whether to save image and label data per embedding
@@ -113,7 +112,7 @@ HEIGHT = GRID_SHAPE[1]
 DEPTH = GRID_SHAPE[2]
 PREFIX = str(WIDTH) + "x" + str(HEIGHT)
 DATADIR = os.path.join(FLAGS.data_dir, PREFIX)
-DATASET = os.path.join(FLAGS.data_dir, PREFIX, "connectivity.h5")
+DATASET = os.path.join(FLAGS.data_dir, "connectivity_8x8.h5")
 
 
 def _add_summaries(wights, bias, act):
@@ -207,7 +206,7 @@ class ConvCA(object):
                 conv_state = conv_layer(
                     state_layers[-1],
                     [3, 3, FLAGS.state_size, FLAGS.state_size],
-                    initializer=tf.truncated_normal_initializer(stddev=1.0, dtype=tf.float32),
+                    # initializer=tf.truncated_normal_initializer(stddev=1.0, dtype=tf.float32),
                     scope=scope)
                 state_layers.append(conv_state)
                 # self.activation_snapshot.append(conv_state)
@@ -229,7 +228,7 @@ class ConvCA(object):
         # print (dropout)
 
         # self.debug = output  # debug local activations
-        sliced = tf.slice(dropout, [0, 0, 0, 0], [-1, 20, 1, 1])
+        sliced = tf.slice(dropout, [0, 0, 0, 0], [-1, 1, WIDTH, 1])
         # print (s)
 
         flattened = tf.reshape(sliced, [-1, WIDTH])
@@ -321,27 +320,22 @@ def conv_ca_model(run_path, args=None):
     saver = tf.train.Saver()
     filename = os.path.join(run_path, "train.ckpt")
 
-    step = 0
+    global_step = -1
     # Continue training and evaluation session from previous run
-    if FLAGS.load_checkoint:
-        ckpt = tf.train.get_checkpoint_state(run_path)
-        if ckpt and ckpt.model_checkpoint_path:
-            saver.restore(sess, ckpt.model_checkpoint_path)
 
-            # take global_step from the checkpoint file path
-            step = ckpt.model_checkpoint_path.split('/')[-1].split('-')[-1]
-            step = int(step)
-            # Extend the max steps with new steps
-            FLAGS.max_steps += step
-            print ("Loading weights from checkpoint at step %d" % step)
-        else:
-            print ("No checkpoint file found")
-            print ("Starting new run.")
-            _flush_directory(run_path)
-            sess.run(tf.global_variables_initializer())
-            # return
+    ckpt = tf.train.get_checkpoint_state(run_path)
+    if ckpt and ckpt.model_checkpoint_path:
+        saver.restore(sess, ckpt.model_checkpoint_path)
+        print ("model restored from checkpoint")
+        # take global_step from the checkpoint file path
+        global_step = ckpt.model_checkpoint_path.split('/')[-1].split('-')[-1]
+        # step = int(step)
+        # Extend the max steps with new steps
+        # print ("Loading weights from checkpoint at step %d" % step)
     else:
-        # Otherwise initialize a new session
+        print ("No checkpoint file found")
+        print ("Starting new run.")
+        _flush_directory(run_path)
         sess.run(tf.global_variables_initializer())
 
     start_time = timer()
@@ -349,10 +343,12 @@ def conv_ca_model(run_path, args=None):
     try:
         # tot_accuracy = 0.0
         # tot_valid_accuracy = 0.0
-        accuracies = []
-        test_accuracies = []
-        losses = []
-        while step <= FLAGS.max_steps:
+        # accuracies = []
+        # test_accuracies = []
+        # losses = []
+
+        data = {"train_accuracy": [], "test_accuracy": [], "losses": []}
+        for step in range(FLAGS.max_steps):
             # training
             # train_batch_x, train_batch_y = datasets.train.next_batch(
             #     FLAGS.batch_size)
@@ -377,28 +373,26 @@ def conv_ca_model(run_path, args=None):
             #     [test.prediction, test.activation_snapshot], feed_dict)
             # test_accuracies.append(test_accuracy)
 
+            def _feed_dict(dropout=DROPOUT, test=False):
+                if test:
+                    input_batch, label_batch = datasets.test.next_batch(FLAGS.batch_size, shuffle_data=False)
+                else:
+                    input_batch, label_batch = datasets.train.next_batch(FLAGS.batch_size)
+                return {inputs_pl: input_batch, labels_pl: label_batch, keep_prob: dropout}
+
             # train
-            train_batch_x, train_batch_y = datasets.train.next_batch(
-                FLAGS.batch_size)
-            feed_dict = {inputs_pl: train_batch_x,
-                         labels_pl: train_batch_y,
-                         keep_prob: DROPOUT}
-            _, loss, accuracy = sess.run(
-                [model.optimizer, model.loss, model.prediction], feed_dict)
-            accuracies.append(accuracy)
-            losses.append(loss)
+            _, loss, train_accuracy = sess.run(
+                [model.optimizer, model.loss, model.prediction], _feed_dict())
 
             # test
-            test_batch_x, test_batch_y = datasets.test.next_batch(
-                FLAGS.batch_size, shuffle_data=False)
-            feed_dict = {inputs_pl: test_batch_x,
-                         labels_pl: test_batch_y,
-                         keep_prob: 1.0}
-            test_accuracy = sess.run(
-                [model.prediction], feed_dict)
-            test_accuracies.append(test_accuracy)
+            test_accuracy = sess.run([model.prediction], _feed_dict(1.0, test=True))
+            # test_accuracies.append(test_accuracy)
 
-            step += 1
+            data["train_accuracy"].append(train_accuracy)            
+            data["test_accuracy"].append(test_accuracy)
+            data["losses"].append(loss)
+
+            global_step += 1
 
             # logging
             # -------
@@ -418,20 +412,18 @@ def conv_ca_model(run_path, args=None):
                 start_time = current_time
 
                 # compute the last log_frequency number of averages
-                avg_accuracy = 1 - np.mean(accuracies)
-                avg_test_accuracy = 1 - np.mean(test_accuracies)
-                avg_loss = np.mean(losses)
+                avg_accuracy = np.mean(data["train_accuracy"])
+                avg_test_accuracy = np.mean(data["test_accuracy"])
+                avg_loss = np.mean(data["losses"])
 
                 write_scalar_summary(
-                    writer, "avg_accuracy/train", avg_accuracy, step)
+                    writer, "avg_accuracy/train", avg_accuracy, global_step)
                 write_scalar_summary(
-                    writer, "avg_accuracy/test", avg_test_accuracy, step)
+                    writer, "avg_accuracy/test", avg_test_accuracy, global_step)
                 write_scalar_summary(
-                    writer, "avg_loss", avg_loss, step)
+                    writer, "avg_loss", avg_loss, global_step)
 
-                accuracies = []
-                test_accuracies = []
-                losses = []
+                data = {"train_accuracy": [], "test_accuracy": [], "losses": []}
 
                 epoch = datasets.train.epochs_completed
                 examples_per_sec = (
@@ -455,11 +447,11 @@ def conv_ca_model(run_path, args=None):
 
             if step % 1000 == 0:
                 # Save the model periodically
-                saver.save(sess, filename, global_step=step)
+                saver.save(sess, filename)
     finally:
         # Save run if stopped before max_steps
         if step != FLAGS.max_steps:
-            saver.save(sess, filename, global_step=step)
+            saver.save(sess, filename)
 
         tot_duration = timer() - tot_running_time
         timed = timedelta(seconds=int(tot_duration))
