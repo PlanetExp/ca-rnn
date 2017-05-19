@@ -7,8 +7,8 @@ from random_walker import create_grids, save_hdf5
 
 
 @click.command()
-@click.option('-w', '--width', default=8, type=int)
-@click.option('-h', '--height', default=8, type=int)
+@click.option('-w', '--width', default=9, type=int)
+@click.option('-h', '--height', default=9, type=int)
 @click.option('-n', '--num-examples', default=10000, type=int)
 @click.option('-p', '--positive-fraction', default=0.5, type=float)
 @click.argument('output_filepath', type=click.Path())
@@ -20,7 +20,7 @@ def main(width, height, num_examples, positive_fraction, output_filepath):
     logger.info('making final data set from raw data')
 
     grids, steps, connection = create_grids(
-        height, width, num_examples, positive_fraction, output_filepath)
+        height, width, num_examples, positive_fraction)
     save_hdf5(grids, steps, connection, output_filepath)
 
 

@@ -7,7 +7,7 @@ import click
 import tensorflow as tf
 
 
-from src.models import create_model
+# from src.models import create_model
 
 
 DIR = os.path.dirname(os.path.realpath(__file__))
@@ -72,6 +72,9 @@ def main(_):
 
     model.train()
 
+def test():
+    print ("tests")
 
 if __name__ == '__main__':
-    tf.app.run()
+    # tf.app.run()
+    tf.test.main()

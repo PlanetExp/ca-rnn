@@ -31,8 +31,8 @@ def get_neighbors(frontier, grid, visited, similar_cells):
     for row, col in frontier:
         for rowdir, coldir in [(0, -1), (1, 0), (0, 1), (-1, 0)]:
             rowneigh, colneigh = row + rowdir, col + coldir
-            if (0 <= colneigh < grid.shape[0] and
-                    0 <= rowneigh < grid.shape[1] and
+            if (0 <= colneigh < grid.shape[1] and
+                    0 <= rowneigh < grid.shape[0] and
                     grid[rowneigh, colneigh] not in similar_cells and
                     (rowneigh, colneigh) not in visited):
                 neighbors.add((rowneigh, colneigh))
@@ -44,20 +44,18 @@ def probability(prob):
     return random.random() <= prob
 
 
-def random_walker_generator(shape, negative=False):
-    """Generates a random walker on a grid of shape [width, height]
+def random_walker_generator(rows, cols, negative=False):
+    """Generates a random walker on a grid of shape [rows, cols]
     Args:
         shape: -
         negative: True to return a negative sample
-    Returns: random walker generator that yields a grid of [width, height]
+    Returns: random walker generator that yields a grid of [rows, cols]
     """
     attempts = 0
     while True:
         steps = 0
         found_goal = False
-        grid = np.zeros(shape)
-        cols = shape[0]
-        rows = shape[1]
+        grid = np.zeros((rows, cols))
         # start on bottom row
         current = (rows - 1, random.randint(0, cols - 1))
         grid[current] = 1
@@ -110,11 +108,11 @@ def random_walker_generator(shape, negative=False):
 
 
 def check_connections_length(grid):
-    cols = grid.shape[0]
-    rows = grid.shape[1]
+    rows = grid.shape[0]
+    cols = grid.shape[1]
     """Returns the longest connection from top to bottom using DFS"""
-    start = [(0, n) for n in range(cols) if grid[0, n] == 2]
-    target = [(rows - 1, n) for n in range(cols) if grid[rows - 1, n] == 2]
+    start = [(0, c) for c in range(cols) if grid[0, c] == 2]
+    target = [(rows - 1, c) for c in range(cols) if grid[rows - 1, c] == 2]
     generation = 0  # generation index
     visited = set()
     frontier = set(start)
@@ -131,8 +129,8 @@ def check_connections_length(grid):
 
 
 def sever_connections(grid):
-    cols = grid.shape[0]
-    rows = grid.shape[1]
+    rows = grid.shape[0]
+    cols = grid.shape[1]
     """Helper function to make sure we don't create an accidental path
     through noise generator"""
     # print ("found accidental connection, severing:")
@@ -154,8 +152,8 @@ def sever_connections(grid):
 
 def render_grid(grid):
     """Helper function to turn all cells to the same value"""
-    cols = grid.shape[0]
-    rows = grid.shape[1]
+    rows = grid.shape[0]
+    cols = grid.shape[1]
     for row in range(rows):
         for col in range(cols):
             if grid[row, col] != 1 and grid[row, col] != 0:
@@ -166,8 +164,8 @@ def render_grid(grid):
 def apply_noise(grid, prob=0.5):
     """Applies a random noise over each cell in grid to a probability
     Avoids noise near a path with lookahead"""
-    cols = grid.shape[0]
-    rows = grid.shape[1]
+    rows = grid.shape[0]
+    cols = grid.shape[1]
     for row in range(rows):
         for col in range(cols):
             if grid[row, col] == 0:
@@ -201,8 +199,8 @@ def apply_noise(grid, prob=0.5):
 
 def draw_grid(grid):
     """Draws a grid of dims [width, height] to stdout"""
-    cols = grid.shape[0]
-    rows = grid.shape[1]
+    rows = grid.shape[0]
+    cols = grid.shape[1]
     for row in range(rows):
         for col in range(cols):
             if grid[row, col] == 0:  # empty
@@ -219,8 +217,8 @@ def draw_grid(grid):
 
 
 def check_repeats(grids):
-    cols = grids.shape[1]
-    rows = grids.shape[2]
+    rows = grids.shape[1]
+    cols = grids.shape[2]
     """Check if the dataset is repeating or not by converting each image
     to a hashed byte-array, then iterating though the new array and look for
     duplicates. Each hash should be unique."""
@@ -261,8 +259,8 @@ def save_hdf5(grids, steps, connection, filename):
         dset_grids = h5file.create_dataset(
             "grids", data=grids, dtype="i", compression="gzip")
         dset_grids.attrs["Description"] = "Grids"
-        h5file["grids"].dims[0].label = "w"
-        h5file["grids"].dims[1].label = "h"
+        h5file["grids"].dims[0].label = "h"  # row, height, y
+        h5file["grids"].dims[1].label = "w"  # col, width, x
         dset_steps = h5file.create_dataset(
             "steps", data=steps, dtype="i", compression="gzip")
         dset_steps.attrs["Description"] = "Number of steps"
@@ -271,7 +269,7 @@ def save_hdf5(grids, steps, connection, filename):
         dset_connection.attrs["Description"] = "Connected or not"
 
 
-def create_grids(width, height, num_examples, positive_fraction, output):
+def create_grids(rows, cols, num_examples, positive_fraction):
     """Creates a grid with a random walker on it"""
     start = timer()
     num_pos = int(num_examples * positive_fraction)
@@ -279,13 +277,13 @@ def create_grids(width, height, num_examples, positive_fraction, output):
 
     assert num_pos + num_neg == num_examples
 
-    grids = np.empty((num_examples, width, height))
+    grids = np.empty((num_examples, rows, cols))
     steps = np.empty((num_examples))
     connection = np.empty((num_examples))
     pos_grid_generator = random_walker_generator(
-        (width, height), negative=False)
+        rows, cols, negative=False)
     neg_grid_generator = random_walker_generator(
-        (width, height), negative=True)
+        rows, cols, negative=True)
 
     for i in range(num_pos):
         grids[i], steps[i] = next(pos_grid_generator)
@@ -302,16 +300,23 @@ def create_grids(width, height, num_examples, positive_fraction, output):
     # plot_histogram(steps[num_pos:], title="Negative examples distribution")
 
     grids, steps, connection = shuffle(
-        grids, steps, connection, random_state=1234)
+        grids, steps, connection)
 
-    # print sample to terminal
-    sample = random.randint(0, num_examples - 1)
-    draw_grid(grids[sample])
-    print ("sample no. %d: %d steps. Connection: %d" %
-           (sample, steps[sample], connection[sample]))
+    draw_random_sample(grids, steps, connection)
     print ("Time: %.3fs" % (end - start))
 
     return grids, steps, connection
+
+
+def draw_random_sample(grids, steps=None, connection=None):
+    """print random sample to terminal"""
+    sample = random.randint(0, grids.shape[0] - 1)
+    draw_grid(grids[sample])
+    print ("sample no. %d" % sample)
+    if steps is None:
+        print ("steps: %d" % steps[sample])
+    if connection is None:
+        print ("connection: %d" % connection[sample])
 
 
 def main():

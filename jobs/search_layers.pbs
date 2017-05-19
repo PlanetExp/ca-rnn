@@ -1,0 +1,24 @@
+#!/bin/bash -l
+
+#PBS -N narrowsearch
+#PBS -l walltime=32:00:00
+#PBS -l mem=1gb
+#PBS -l ncpus=1
+#PBS -J 1-162
+
+source activate tf-cpu
+
+cd $PBS_O_WORKDIR
+
+let INDEX=${PBS_ARRAY_INDEX}+1
+IFS=',' read params <<< `sed -n "$INDEX p" layers.csv`
+paramArray=($params)
+
+i=${paramArray[0]}
+j=${paramArray[1]}
+k=${paramArray[2]}
+
+cd ..
+python3 src/models/conv_ca.py --num_layers=$i --state_size=$j --run=$k \
+--max_steps=50000 --height=8 --width=8 --test_fraction=0.2 --batch_size=500 \
+--data_dir "data/connectivity_10000_8x8.h5"

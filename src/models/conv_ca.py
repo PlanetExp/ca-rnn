@@ -48,88 +48,69 @@ from dataset import load_hdf5, create_datasets
 
 # Global container and accessor for flags and their values
 FLAGS = tf.app.flags.FLAGS
+flags = tf.app.flags
 
 # PARAMETERS
 # ----------
 # (flag_name, default_value, doc-string)
-# determine hparam string
-tf.app.flags.DEFINE_integer(
-    "num_layers", 1, "Number of convolution layers to stack.")
-tf.app.flags.DEFINE_integer(
-    "state_size", 1,
-    "Number of depth dimensions for each convolution layer in stack.")
-tf.app.flags.DEFINE_integer(
-    "run", 99, "Set subdirectory number to save logs to.")
-tf.app.flags.DEFINE_integer(
-    "batch_size", 256, "Set batch size per step")
-tf.app.flags.DEFINE_float(
-    "learning_rate", 0.04, "Set learning rate.")
-tf.app.flags.DEFINE_integer(
-    "log_frequency", 100, "Number of steps before printing logs.")
-tf.app.flags.DEFINE_integer(
-    "max_steps", 30000, "Set maximum number of steps to train for")
-tf.app.flags.DEFINE_string(
-    "data_dir", "../../data", "Directory of the dataset")
-tf.app.flags.DEFINE_string(
-    "train_dir", "../../../results/train", "Directory to save train event files")
-tf.app.flags.DEFINE_string(
-    "checkpoint_dir", "../../../results/train", "Directory to save checkpoints")
-tf.app.flags.DEFINE_string(
-    "logfile", "logfile", "Name of logfile")
-tf.app.flags.DEFINE_boolean(
-    "load_checkoint", True,
-    "Whether or not to load checkpoint and continue training from last step.")
 
-NUM_CLASSES = 2
+# Model parameters
+flags.DEFINE_integer("num_layers", 1, "Number of convolution layers to stack.")
+flags.DEFINE_integer("state_size", 1, "Number of depth dimensions for each convolution layer in stack.")
+flags.DEFINE_float("learning_rate", 1e-4, "Set learning rate.")
+
+
+# Dataset parameters
+flags.DEFINE_integer("batch_size", 500, "Set batch size per step")
+flags.DEFINE_integer("num_classes", 2, "...")
+flags.DEFINE_integer("height", 14, "...")
+flags.DEFINE_integer("width", 14, "...")
+flags.DEFINE_integer("depth", 1, "...")
+flags.DEFINE_float("test_fraction", 0.2, "...")
+
+
+# Run parameters
+flags.DEFINE_integer("log_frequency", 100, "Number of steps before printing logs.")
+flags.DEFINE_integer("max_steps", 30000, "Set maximum number of steps to train for")
+flags.DEFINE_boolean("debug", False, "Flush directories before every run and print more info.")
+
+
+# Directories
+flags.DEFINE_integer("run", 101, "Set subdirectory number to save logs to.")
+flags.DEFINE_string("data_dir", "", "Directory of the dataset")
+flags.DEFINE_string("train_dir", "../results", "Directory to save train event files")
+flags.DEFINE_string("checkpoint_dir", "../results", "Directory to save checkpoints")
+flags.DEFINE_string("logfile", "logfile", "Name of logfile")
+
+
 # Set whether to reuse variables between CA layers or not.
 REUSE_VARIABLES = True
 # If Leaky ReLU is used, set the rate of the leak
-LRELU_RATE = 0.02
+LRELU_RATE = 0.01
 # Percent of dropout to apply to training process
 DROPOUT = 1.0
 # Fraction of dataset to split into test samples
-TEST_SIZE = 0.2
+TEST_SIZE = 0.5
 # Set epsilon for Adam optimizer
-EPSILON = 0.9
-# Size of grid: tuple of dim (width, height, depth)
-GRID_SHAPE = (8, 8, 1)
-# Whether or not to record embeddings for this run
-FLAGS.embedding = False
-# Whether to save image and label data per embedding
-SAVE_EMBEDDING_METADATA = False
-NUM_EMBEDDINGS = 32
-# Whether to record run metadata (e.g. run times, memory consumption etc.)
-# view these in either Tensorboard or save to json file with a
-# tensorflow.python.client.timeline object and and view a web browser
-SAVE_RUN_METADATA = False
+EPSILON = 1e-8
+
 # Saves snapshots of the layer activations in separate folder
 SAVE_ACTIVATION_SNAPSHOT = False
 SNAPSHOT_DIR = "tmp/snaps"
 
 # Data parameters
-WIDTH = GRID_SHAPE[0]
-HEIGHT = GRID_SHAPE[1]
-DEPTH = GRID_SHAPE[2]
-PREFIX = str(WIDTH) + "x" + str(HEIGHT)
-DATADIR = os.path.join(FLAGS.data_dir, PREFIX)
-DATASET = os.path.join(FLAGS.data_dir, "connectivity_8x8.h5")
+PREFIX = str(FLAGS.height) + "x" + str(FLAGS.width)
 
-
-def _add_summaries(wights, bias, act):
-    """Helper to add summaries"""
-    tf.summary.histogram("weights", wights)
-    tf.summary.histogram("biases", bias)
-    tf.summary.histogram("activations", act)
-    tf.summary.scalar("sparsity", tf.nn.zero_fraction(act))
-
-
-def conv_layer(inputs, kernel,
-               initializer=None, name=None, scope=None):
+def conv_layer(inputs,
+               kernel,
+               initializer=None,
+               name=None, 
+               scope=None):
     """Helper to create convolution layer and add summaries"""
     initializer = initializer or tf.contrib.layers.xavier_initializer_conv2d()
     with tf.variable_scope(scope or name):
         wights = tf.get_variable(
-            "weights", kernel, initializer=initializer, dtype=tf.float32)
+            "weights", kernel, initializer=initializer, dtype=tf.float32)  #  regularizer=tf.contrib.layers.l2_regularizer(0.5)
         bias = tf.get_variable(
             "biases", [kernel[3]], initializer=tf.constant_initializer(0.01))
         conv = tf.nn.conv2d(inputs, wights,
@@ -172,7 +153,7 @@ def save_activation_snapshot(snap, step, path):
 
 
 class ConvCA(object):
-    def __init__(self, inputs, labels, keep_prob, istrain=True):
+    def __init__(self, inputs, labels, keep_prob, global_step):
         """Creates inference logits and sets up a graph that can be reached
             through the properties inference, loss, optimizer and prediction
             respectively
@@ -184,8 +165,7 @@ class ConvCA(object):
             istrain: bool whether model is for training or testing, if train
                 create an additional optimizer and loss function
         """
-        # conv2d wants 3d data
-        inputs = tf.reshape(inputs, [-1, WIDTH, HEIGHT, 1])
+        # inputs = tf.reshape(inputs, [-1, HEIGHT, WIDTH, 1])
         # Input convolution layer
         # -----------------------
         # Increase input depth from 1 to state_size
@@ -206,7 +186,6 @@ class ConvCA(object):
                 conv_state = conv_layer(
                     state_layers[-1],
                     [3, 3, FLAGS.state_size, FLAGS.state_size],
-                    # initializer=tf.truncated_normal_initializer(stddev=1.0, dtype=tf.float32),
                     scope=scope)
                 state_layers.append(conv_state)
                 # self.activation_snapshot.append(conv_state)
@@ -228,56 +207,53 @@ class ConvCA(object):
         # print (dropout)
 
         # self.debug = output  # debug local activations
-        sliced = tf.slice(dropout, [0, 0, 0, 0], [-1, 1, WIDTH, 1])
-        # print (s)
+        sliced = tf.slice(dropout, [0, 0, 0, 0], [-1, 1, FLAGS.width, 1])
 
-        flattened = tf.reshape(sliced, [-1, WIDTH])
+        flattened = tf.reshape(sliced, [-1, FLAGS.width])
         # flattened = tf.reshape(dropout, [-1, WIDTH * HEIGHT])
 
         # Softmax linear
         # --------------
         with tf.variable_scope("softmax_linear"):
             weights = tf.get_variable(
-                "weights", [WIDTH, NUM_CLASSES],
+                "weights", [FLAGS.width, FLAGS.num_classes],
                 # "weights", [WIDTH * HEIGHT, NUM_CLASSES],
                 initializer=tf.contrib.layers.xavier_initializer(),
                 dtype=tf.float32)
             bias = tf.get_variable(
-                "biases", [NUM_CLASSES],
+                "biases", [FLAGS.num_classes],
                 initializer=tf.zeros_initializer())
             logits = tf.nn.xw_plus_b(flattened, weights, bias)
             # _add_summaries(w, b, logits)
         self.inference = logits
 
+        # Create loss function
+        with tf.name_scope("loss"):
+            cross_entropy = tf.reduce_mean(
+                tf.nn.sparse_softmax_cross_entropy_with_logits(
+                    logits=logits, labels=labels, name="cross_entropy"))
+
+            # Add regularization
+            # reg_losses = tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES)
+            # reg_constant = 0.01
+            # loss = cross_entropy + reg_constant * np.sum(reg_losses)
+        self.loss = cross_entropy
+
+        # Create training optimizer
+        with tf.name_scope("optimizer"):
+            train_step = tf.train.AdamOptimizer(
+                FLAGS.learning_rate, beta1=0.9, beta2=0.999,
+                epsilon=EPSILON).minimize(
+                    cross_entropy, global_step=global_step)
+        self.optimizer = train_step
+
         with tf.name_scope("prediction"):
-            correct_prediction = tf.equal(
-                tf.argmax(logits, 1), tf.cast(labels, tf.int64))
-            accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
-            # tf.summary.scalar("accuracy", accuracy)
+            # correct_prediction = tf.equal(
+                # tf.argmax(logits, 1), tf.cast(labels, tf.int64))
+            # accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
+            correct = tf.nn.in_top_k(logits, labels, 1)
+            accuracy = tf.reduce_sum(tf.cast(correct, tf.float32))
         self.prediction = accuracy
-
-        if istrain:
-            # Unique to train graph
-            # Create loss function
-            with tf.name_scope("loss"):
-                cross_entropy = tf.reduce_mean(
-                    tf.nn.sparse_softmax_cross_entropy_with_logits(
-                        logits=logits, labels=labels, name="cross_entropy"))
-                # tf.summary.scalar("loss", cross_entropy)
-            self.loss = cross_entropy
-
-            # Create training optimizer
-            with tf.name_scope("optimizer"):
-                train_step = tf.train.AdamOptimizer(
-                    FLAGS.learning_rate, beta1=0.9, beta2=0.999,
-                    epsilon=EPSILON).minimize(
-                        cross_entropy)
-            self.optimizer = train_step
-        else:
-            # Unique to test graph
-            if FLAGS.embedding:
-                self.embedding_input = flattened
-                self.embedding_size = WIDTH * HEIGHT
 
 
 def conv_ca_model(run_path, args=None):
@@ -288,26 +264,18 @@ def conv_ca_model(run_path, args=None):
     sess = tf.Session()
 
     # Load datasets
-    grids, connections, _ = load_hdf5(DATASET)
-    grids = grids.reshape((-1, WIDTH, HEIGHT, 1))
-    datasets = create_datasets(grids, connections, test_size=TEST_SIZE)
-    # print (datasets.train.num_examples, datasets.test.num_examples)
+    grids, connections, _ = load_hdf5(FLAGS.data_dir)
+    grids = grids.reshape((-1, FLAGS.height, FLAGS.width, 1))
+    datasets = create_datasets(grids, connections, test_fraction=FLAGS.test_fraction)
 
     # Keep probability for dropout layer
+    global_step_tensor = tf.Variable(0, trainable=False, name="global_step")
     keep_prob = tf.placeholder(tf.float32, name="keep_prob")
     inputs_pl = tf.placeholder(
-        tf.float32, shape=[None, WIDTH, HEIGHT, DEPTH], name="inputs")
+        tf.float32, shape=[None, FLAGS.height, FLAGS.width, FLAGS.depth], name="inputs")
     labels_pl = tf.placeholder(tf.int32, shape=[None], name="labels")
 
-    # Make a template out of model to create two models that
-    # share the same graph and variables
-    # shared_model = tf.make_template("model", ConvCA)
-    # with tf.name_scope("train"):
-    #     train = shared_model(inputs_pl, labels_pl, keep_prob)
-    # with tf.name_scope("test"):
-    #     test = shared_model(inputs_pl, labels_pl, keep_prob, istrain=False)
-
-    model = ConvCA(inputs_pl, labels_pl, keep_prob)
+    model = ConvCA(inputs_pl, labels_pl, keep_prob, global_step_tensor)
 
     # Create writer to write summaries to file
     writer = tf.summary.FileWriter(run_path)
@@ -320,58 +288,24 @@ def conv_ca_model(run_path, args=None):
     saver = tf.train.Saver()
     filename = os.path.join(run_path, "train.ckpt")
 
-    global_step = -1
     # Continue training and evaluation session from previous run
-
     ckpt = tf.train.get_checkpoint_state(run_path)
     if ckpt and ckpt.model_checkpoint_path:
         saver.restore(sess, ckpt.model_checkpoint_path)
         print ("model restored from checkpoint")
         # take global_step from the checkpoint file path
-        global_step = ckpt.model_checkpoint_path.split('/')[-1].split('-')[-1]
-        # step = int(step)
-        # Extend the max steps with new steps
-        # print ("Loading weights from checkpoint at step %d" % step)
+        # global_step = ckpt.model_checkpoint_path.split('/')[-1].split('-')[-1]
     else:
-        print ("No checkpoint file found")
         print ("Starting new run.")
-        _flush_directory(run_path)
+        # _flush_directory(run_path)
         sess.run(tf.global_variables_initializer())
 
     start_time = timer()
     tot_running_time = start_time
     try:
-        # tot_accuracy = 0.0
-        # tot_valid_accuracy = 0.0
-        # accuracies = []
-        # test_accuracies = []
-        # losses = []
-
+        best_test_accuracy = 0.0
         data = {"train_accuracy": [], "test_accuracy": [], "losses": []}
-        for step in range(FLAGS.max_steps):
-            # training
-            # train_batch_x, train_batch_y = datasets.train.next_batch(
-            #     FLAGS.batch_size)
-            # feed_dict = {inputs_pl: train_batch_x,
-            #              labels_pl: train_batch_y,
-            #              keep_prob: DROPOUT}
-            # _, loss, accuracy = sess.run(
-            #     [train.optimizer, train.loss, train.prediction], feed_dict)
-            # accuracies.append(accuracy)
-            # losses.append(loss)
-
-            # # test
-            # test_batch_x, test_batch_y = datasets.test.next_batch(
-            #     FLAGS.batch_size, shuffle_data=False)
-            # feed_dict = {inputs_pl: test_batch_x,
-            #              labels_pl: test_batch_y,
-            #              keep_prob: 1.0}
-            # test_accuracy = sess.run(
-            #     [test.prediction], feed_dict)
-            # test_accuracies.append(test_accuracy)
-            # test_accuracy, snap = sess.run(
-            #     [test.prediction, test.activation_snapshot], feed_dict)
-            # test_accuracies.append(test_accuracy)
+        for step in range(1, FLAGS.max_steps):
 
             def _feed_dict(dropout=DROPOUT, test=False):
                 if test:
@@ -381,26 +315,15 @@ def conv_ca_model(run_path, args=None):
                 return {inputs_pl: input_batch, labels_pl: label_batch, keep_prob: dropout}
 
             # train
-            _, loss, train_accuracy = sess.run(
-                [model.optimizer, model.loss, model.prediction], _feed_dict())
+            _, loss, train_accuracy, global_step = sess.run(
+                [model.optimizer, model.loss, model.prediction, global_step_tensor], _feed_dict())
 
             # test
             test_accuracy = sess.run([model.prediction], _feed_dict(1.0, test=True))
-            # test_accuracies.append(test_accuracy)
 
             data["train_accuracy"].append(train_accuracy)            
             data["test_accuracy"].append(test_accuracy)
             data["losses"].append(loss)
-
-            global_step += 1
-
-            # logging
-            # -------
-            # log(step, accuracies)
-
-            # if step % 50 == 0:
-            #     summary = sess.run(merged_summary, feed_dict)
-            #     writer.add_summary(summary, step)
 
             if step % FLAGS.log_frequency == 0:
 
@@ -412,9 +335,15 @@ def conv_ca_model(run_path, args=None):
                 start_time = current_time
 
                 # compute the last log_frequency number of averages
-                avg_accuracy = np.mean(data["train_accuracy"])
-                avg_test_accuracy = np.mean(data["test_accuracy"])
-                avg_loss = np.mean(data["losses"])
+                avg_accuracy = np.sum(data["train_accuracy"]) / FLAGS.batch_size
+                avg_test_accuracy = np.sum(data["test_accuracy"]) / FLAGS.batch_size
+                avg_loss = np.sum(data["losses"]) / FLAGS.batch_size
+                # avg_accuracy = np.mean(data["train_accuracy"])
+                # avg_test_accuracy = np.mean(data["test_accuracy"])
+                # avg_loss = np.mean(data["losses"])
+
+                if avg_test_accuracy > best_test_accuracy:
+                    best_test_accuracy = avg_test_accuracy
 
                 write_scalar_summary(
                     writer, "avg_accuracy/train", avg_accuracy, global_step)
@@ -423,41 +352,38 @@ def conv_ca_model(run_path, args=None):
                 write_scalar_summary(
                     writer, "avg_loss", avg_loss, global_step)
 
+                # reset data
                 data = {"train_accuracy": [], "test_accuracy": [], "losses": []}
 
-                epoch = datasets.train.epochs_completed
                 examples_per_sec = (
                     FLAGS.log_frequency * FLAGS.batch_size / duration)
                 sec_per_batch = float(duration / FLAGS.log_frequency)
-                format_str = ("%s step %d/%d, epoch %.2f, loss: %.4f, "
-                              "avg. mcr: %.4f (%.4f) "
-                              "(%.1fex/s; %.3fs/batch)")
-                print(format_str % (
-                    datetime.now().strftime("%m/%d %H:%M:%S"),
-                    step, FLAGS.max_steps, epoch, loss, avg_accuracy,
-                    avg_test_accuracy, examples_per_sec, sec_per_batch))
-
                 progress = float(step / FLAGS.max_steps)
                 estimated_duration = (
                     (FLAGS.max_steps * FLAGS.batch_size) *
                     (1 - progress) / examples_per_sec)
                 timed = timedelta(seconds=int(estimated_duration))
-                format_str = "ETA: %s (%.1f%%)"
-                print (format_str % (str(timed), progress * 100))
+
+                format_str = ("INFO:ETA: %s (step: %d): loss: %.4f, "
+                              "global_step: %d, accuracy: %.3f, test: %.3f "
+                              "(%.1fex/s; %.3fs/batch)")
+                print(format_str % (str(timed), step, loss, global_step, avg_accuracy,
+                    avg_test_accuracy, examples_per_sec, sec_per_batch), end="\r", flush=True)
 
             if step % 1000 == 0:
                 # Save the model periodically
-                saver.save(sess, filename)
+                saver.save(sess, filename, global_step=step)
     finally:
         # Save run if stopped before max_steps
         if step != FLAGS.max_steps:
-            saver.save(sess, filename)
+            saver.save(sess, filename, global_step=step)
 
         tot_duration = timer() - tot_running_time
         timed = timedelta(seconds=int(tot_duration))
-        print ("Total running time: %s" % timed)
+        print ("\nTotal running time: %s" % timed)
         print ("Layers: %d, State dims: %d, Run: %d, lr: %.0e" %
             (FLAGS.num_layers, FLAGS.state_size, FLAGS.run, FLAGS.learning_rate))
+        print ("Best accuracy (test): %f\n" % best_test_accuracy)
 
         writer.close()
         sess.close()
@@ -470,48 +396,23 @@ def write_scalar_summary(writer, tag, value, step):
     writer.add_summary(summary, step)
 
 
-def setup_embedding_projector(embedding, writer):
-    """Sets up embedding projector in Tensorboard and links meta-data to
-        a Tensorflow writer, that in turns saves the data to disk in a
-        checkpoint file.
-
-    Args:
-        embedding: an embedding variable
-        writer: a Tensorflow writer object
-    """
-    config = tf.contrib.tensorboard.plugins.projector.ProjectorConfig()
-    embedding_config = config.embeddings.add()
-    embedding_config.tensor_name = embedding.name
-    if SAVE_EMBEDDING_METADATA:
-        # Link this tensor to its metadata file (e.g. labels).
-        # NOTE: Directory relative to where you start Tensorboard
-        embedding_config.sprite.image_path = os.path.join(
-            DATADIR, "sprite_1024.png")
-        embedding_config.metadata_path = os.path.join(
-            DATADIR, "labels_1024.tsv")
-        # Specify the width and height of a single thumbnail.
-        embedding_config.sprite.single_image_dim.extend([WIDTH, HEIGHT])
-    tf.contrib.tensorboard.plugins.projector.visualize_embeddings(
-        writer, config)
-
-
 class Logger(object):
     """Logger object that prints both to logfile and to stdout"""
-    def __init__(self):
+    def __init__(self, path):
         self.terminal = sys.stdout
-        self.log = open(FLAGS.logfile + ".log", "a")
+        self.log = open(os.path.join(path, FLAGS.logfile + ".log"), "a")
 
     def write(self, message):
         """writes a message both to terminal and to logfile"""
         self.terminal.write(message)
-        self.log.write(message)  
+        self.log.write(message)
 
     def flush(self):
         """Handles python3 flush"""
-        #this flush method is needed for python 3 compatibility.
-        #this handles the flush command by doing nothing.
-        #you might want to specify some extra behavior here.
-        pass    
+        # this flush method is needed for python 3 compatibility.
+        # this handles the flush command by doing nothing.
+        # you might want to specify some extra behavior here.
+        pass
 
 
 def make_hparam_str(num_layers, state_size):
@@ -533,30 +434,27 @@ def main(argv=None):  # pylint: disable=unused-argument
     possibly generating new, generates a hparam string and runs training.
 
     Args:
-        argv: 
+        argv:
             list of command line arguments that is run with the script
     """
-    # Generate dataset of (shape) if none exists in data_dir already
-    # maybe_generate_data(
-    #     DATADIR,
-    #     shape=GRID_SHAPE,
-    #     stone_probability=0.45,
-    #     num_examples=FLAGS.num_examples // FLAGS.num_files,
-    #     num_files=FLAGS.num_files)
-
-    # enable logging to file with print
-    sys.stdout = Logger()
 
     hparam = make_hparam_str(
         FLAGS.num_layers, FLAGS.state_size)
     run_path = os.path.join(
         FLAGS.train_dir, PREFIX, hparam, "run" + str(FLAGS.run))
 
-    print ("-" * 40 + "\n")
-    print ("Starting run %d for %s" % (FLAGS.run, hparam))
+    # enable logging to file with print
+    if not tf.gfile.Exists(run_path):
+        tf.gfile.MakeDirs(run_path)
+    sys.stdout = Logger(run_path)
 
-    # Flush run_path for convenience
-    if not FLAGS.load_checkoint:
+    print ("=" * 50 + "\n")
+    print ("Starting run %d for %s" % (FLAGS.run, hparam))
+    print ("Dataset: %s" % FLAGS.data_dir)
+    print ("%s" % datetime.now())
+    print ("-" * 50 + "\n")
+
+    if FLAGS.debug:
         _flush_directory(run_path)
 
     args = []

@@ -1,14 +1,23 @@
-.PHONY: clean data lint requirements
+.PHONY: clean data lint requirements train
 
 PYTHON_INTERPRETER = python3
+
+## Project specific
+DATA_FILE = "data/connectivity_10000_8x8.h5"
 
 ## Install Python Dependencies
 requirements: test_environment
 	pip install -r requirements.txt
 
+## Train model
+train:
+	$(PYTHON_INTERPRETER) src/models/conv_ca.py --num_layers 1 --state_size=1 --run=101 \
+	--debug=True --width=8 --height=8 --test_fraction=0.2 --data_dir $(DATA_FILE)
+
+
 ## Make Dataset
 data: requirements
-	$(PYTHON_INTERPRETER) src/data/make_dataset.py -w 8 -h 8 -n 100000 -p 0.5 "data/connectivity_8x8.h5"
+	$(PYTHON_INTERPRETER) src/data/make_dataset.py -h 8 -w 8 -n 10000 -p 0.5 $(DATA_FILE)
 
 ## Delete all compiled Python files
 clean:

@@ -43,7 +43,7 @@ class Dataset(object):
         """Return the float number of epochs this dataset has completed"""
         return self._epochs_completed
 
-    def next_batch(self, batch_size, shuffle_data=True, random_state=None):
+    def next_batch(self, batch_size, shuffle_data=True):
         """Return the next batch_size examples from Dataset
 
         Args:
@@ -61,27 +61,20 @@ class Dataset(object):
 
             # Shuffle data
             if shuffle_data:
-                # Lazy version below without sklearn dependency
-                # perm = permutation(self._num_examples)
-                # self._inputs = self._inputs[perm]
-                # self._labels = self._labels[perm]
                 self._inputs, self._labels = shuffle(
-                    self._inputs, self._labels, random_state=random_state)
+                    self._inputs, self._labels)
 
             # Start next epoch.
             start = 0
             self._index_in_epoch = batch_size
             assert batch_size <= self._num_examples, "batch_size exceeds \
                 number of examples in Dataset"
-            # while batch_size > self._num_examples:  # wrap epochs
-            #     batch_size -= self._num_examples
-            #     return self.batch(self._num_examples)
 
         end = self._index_in_epoch
         return self._inputs[start:end], self._labels[start:end]
 
 
-def create_datasets(inputs, labels, test_size=0.5, random_state=1234):
+def create_datasets(inputs, labels, test_fraction=0.5):
     """Process the saved dataset and create a dataset
 
     Returns:
@@ -89,7 +82,7 @@ def create_datasets(inputs, labels, test_size=0.5, random_state=1234):
             datasets objects
     """
     inputs_train, inputs_test, labels_train, labels_test = train_test_split(
-        inputs, labels, test_size=test_size, random_state=random_state)
+        inputs, labels, test_size=test_fraction)
 
     train = Dataset(inputs_train, labels_train)
     test = Dataset(inputs_test, labels_test)

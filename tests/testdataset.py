@@ -5,11 +5,22 @@ import numpy as np
 from pprint import pprint
 import os
 
-from dataset import create_datasets
-from random_walker import load_hdf5
-
+from models.dataset import load_hdf5, create_datasets
+from data.
 
 class DatasetTests(tf.test.TestCase):
+
+    def testSlice(self):
+        pass
+
+    def testRepeatingGrids(self):
+
+        # should repeat
+        path = tf.test.get_temp_dir() + "dset.h5"
+        size = (1,1)
+        n = 100
+        dset = create_dataset(size, n, path)
+        check_repeat(dset)
 
     def testBatch(self):
         """Tests batch"""
