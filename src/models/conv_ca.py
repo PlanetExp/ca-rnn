@@ -82,6 +82,8 @@ flags.DEFINE_string("train_dir", "../results", "Directory to save train event fi
 flags.DEFINE_string("checkpoint_dir", "../results", "Directory to save checkpoints")
 flags.DEFINE_string("logfile", "logfile", "Name of logfile")
 
+# Other options
+flags.DEFINE_boolean("one_line_logs", False, "Enables logging with carriage return.")
 
 # Set whether to reuse variables between CA layers or not.
 REUSE_VARIABLES = True
@@ -443,6 +445,9 @@ def main(argv=None):  # pylint: disable=unused-argument
     run_path = os.path.join(
         FLAGS.train_dir, PREFIX, hparam, "run" + str(FLAGS.run))
 
+    if FLAGS.debug:
+        _flush_directory(run_path)
+
     # enable logging to file with print
     if not tf.gfile.Exists(run_path):
         tf.gfile.MakeDirs(run_path)
@@ -453,9 +458,6 @@ def main(argv=None):  # pylint: disable=unused-argument
     print ("Dataset: %s" % FLAGS.data_dir)
     print ("%s" % datetime.now())
     print ("-" * 50 + "\n")
-
-    if FLAGS.debug:
-        _flush_directory(run_path)
 
     args = []
     if SAVE_ACTIVATION_SNAPSHOT:
