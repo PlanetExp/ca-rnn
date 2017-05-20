@@ -12,7 +12,7 @@ requirements: test_environment
 ## Train model
 train:
 	$(PYTHON_INTERPRETER) src/models/conv_ca.py --num_layers 1 --state_size=1 --run=101 \
-	--debug=True --width=14 --height=14 --test_fraction=0.2 --data_dir $(DATA_FILE)\
+	--debug=True --width=14 --height=14 --test_fraction=0.2 --data_dir $(DATA_FILE) \
 	--dense_logs=True
 
 

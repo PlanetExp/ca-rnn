@@ -83,7 +83,7 @@ flags.DEFINE_string("checkpoint_dir", "../results", "Directory to save checkpoin
 flags.DEFINE_string("logfile", "logfile", "Name of logfile")
 
 # Other options
-flags.DEFINE_boolean("one_line_logs", False, "Enables logging with carriage return.")
+flags.DEFINE_boolean("dense_logs", False, "Enables logging with carriage return.")
 
 # Set whether to reuse variables between CA layers or not.
 REUSE_VARIABLES = True
@@ -369,8 +369,13 @@ def conv_ca_model(run_path, args=None):
                 format_str = ("INFO:ETA: %s (step: %d): loss: %.4f, "
                               "global_step: %d, accuracy: %.3f, test: %.3f "
                               "(%.1fex/s; %.3fs/batch)")
-                print(format_str % (str(timed), step, loss, global_step, avg_accuracy,
-                    avg_test_accuracy, examples_per_sec, sec_per_batch), end="\r", flush=True)
+                if FLAGS.dense_logs:
+                    print(format_str % (str(timed), step, loss, global_step, avg_accuracy,
+                        avg_test_accuracy, examples_per_sec, sec_per_batch), end="\r", flush=True)
+                else:
+                    print(format_str % (str(timed), step, loss, global_step, avg_accuracy,
+                        avg_test_accuracy, examples_per_sec, sec_per_batch))
+
 
             if step % 1000 == 0:
                 # Save the model periodically
