@@ -3,7 +3,7 @@
 PYTHON_INTERPRETER = python3
 
 ## Project specific
-DATA_FILE = "data/connectivity_10000_14x14.h5"
+DATA_FILE = "data/connectivity_10000_28x28.h5"
 
 ## Install Python Dependencies
 requirements: test_environment
@@ -11,14 +11,16 @@ requirements: test_environment
 
 ## Train model
 train:
-	$(PYTHON_INTERPRETER) src/models/conv_ca.py --num_layers 1 --state_size=1 --run=101 \
-	--debug=True --width=14 --height=14 --test_fraction=0.2 --data_dir $(DATA_FILE) \
+	$(PYTHON_INTERPRETER) src/models/conv_ca.py --num_layers=10 --state_size=10 --run=101 \
+	--debug=True --width=28 --height=28 --test_fraction=0.2 --data_dir $(DATA_FILE) \
 	--dense_logs=True
 
+## Generate pbs job script
+## pbs: WIP
 
 ## Make Dataset
 data: requirements
-	$(PYTHON_INTERPRETER) src/data/make_dataset.py -h 14 -w 14 -n 10000 -p 0.5 $(DATA_FILE)
+	$(PYTHON_INTERPRETER) src/data/make_dataset.py -h 28 -w 28 -n 10000 -p 0.5 $(DATA_FILE)
 
 ## Delete all compiled Python files
 clean:
