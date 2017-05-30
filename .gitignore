@@ -1,4 +1,4 @@
-led / optimized / DLL files
+# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
@@ -92,12 +92,6 @@ ENV/
 
 # Mac specific
 .DS_Store
-sublime/
 
-# Project specific
-tmp/
-venv2/
-venv3/
-conv_ca/img/
-graph/
-data/
+# exclude data from source control by default
+/data/
