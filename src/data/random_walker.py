@@ -62,6 +62,8 @@ def random_walker_generator(rows, cols, negative=False):
         steps += 1
         visited = set(current)
 
+        connection = 0
+
         neighbors = get_neighbors(current, grid, visited, similar_cells={1})
         while len(neighbors) > 0:
             for (neigh_x, neigh_y) in set(neighbors):
@@ -102,7 +104,21 @@ def random_walker_generator(rows, cols, negative=False):
             # print ("Succeeded after %d attempts" % attempts)
             attempts = 0
             grid = apply_noise(grid)
-            yield grid, steps
+
+            # hack
+            # override above step counter, because the random noise
+            # might have added more, shorter connections
+            # we do this because network was picking up patterns
+            # from making random noise not entirely random
+            steps, connected = check_connections_length(grid)
+            if connected and negative:
+                    continue
+
+            # randomly flip grid upside down
+            if random.random() <= 0.5:
+                grid = np.flipud(grid)
+
+            yield grid, steps, connected
         else:
             attempts += 1
 
@@ -111,21 +127,21 @@ def check_connections_length(grid):
     rows = grid.shape[0]
     cols = grid.shape[1]
     """Returns the longest connection from top to bottom using DFS"""
-    start = [(0, c) for c in range(cols) if grid[0, c] == 2]
-    target = [(rows - 1, c) for c in range(cols) if grid[rows - 1, c] == 2]
+    top = [(0, c) for c in range(cols) if grid[0, c] == 1]
+    bottom = [(rows - 1, c) for c in range(cols) if grid[rows - 1, c] == 1]
     generation = 0  # generation index
     visited = set()
-    frontier = set(start)
+    frontier = set(bottom)
 
-    while not frontier.intersection(target):
+    while not frontier.intersection(top):
         generation += 1
         visited.update(frontier)
         frontier = get_neighbors(frontier, grid, visited, similar_cells={0})
         # time.sleep(1)
-        # pprint(frontier)
         if not frontier:  # cul de sac!
-            return None
-    return generation
+            return generation, False
+            # return None
+    return generation, True
 
 
 def sever_connections(grid):
@@ -161,7 +177,7 @@ def render_grid(grid):
     return grid
 
 
-def apply_noise(grid, prob=0.5):
+def apply_noise(grid, prob=0.2):
     """Applies a random noise over each cell in grid to a probability
     Avoids noise near a path with lookahead"""
     rows = grid.shape[0]
@@ -174,26 +190,26 @@ def apply_noise(grid, prob=0.5):
                 if random.random() <= prob:
                     cell = 2
                 # Make sure we only apply noise outside the path
-                neighbors = get_neighbors(
-                    (row, col), grid, visited=set(), similar_cells={1})
-                if len(neighbors) == 4:
-                    grid[row, col] = cell
-                elif (len(neighbors) == 3 and
-                      (row == 0 or row == rows - 1 or
-                       col == 0 or col == cols - 1)):
-                    # Handle edge cases
-                    grid[row, col] = cell
-                elif (len(neighbors) == 2 and
-                        ((row == 0 and col == 0) or
-                            (row == 0 and col == cols - 1) or
-                            (row == rows - 1 and col == 0) or
-                            (row == rows - 1 and col == cols - 1))):
-                    # Handle corner cases
+                # neighbors = get_neighbors(
+                #     (row, col), grid, visited=set(), similar_cells={1})
+                # if len(neighbors) == 4:
+                #     grid[row, col] = cell
+                # elif (len(neighbors) == 3 and
+                #       (row == 0 or row == rows - 1 or
+                #        col == 0 or col == cols - 1)):
+                #     # Handle edge cases
+                #     grid[row, col] = cell
+                # elif (len(neighbors) == 2 and
+                #         ((row == 0 and col == 0) or
+                #             (row == 0 and col == cols - 1) or
+                #             (row == rows - 1 and col == 0) or
+                #             (row == rows - 1 and col == cols - 1))):
+                #     # Handle corner cases
                     grid[row, col] = cell
 
     # Could be written better, but it's still pretty fast
-    if check_connections_length(grid):
-        grid = sever_connections(grid)
+    # if check_connections_length(grid):
+    #     grid = sever_connections(grid)
     return render_grid(grid)
 
 
@@ -231,46 +247,11 @@ def check_repeats(grids):
     print ("No repeats found out of %d samples." % grids.shape[0])
 
 
-# def load_hdf5(filename):
-#     """Load a hdf5 file
-#     Args:
-#         filename: filename to load data
-
-#     Returns:
-#         grids, connections, steps: tuple
-#     """
-#     with h5py.File(filename, "r") as h5file:
-#         grids = h5file["grids"]
-#         steps = h5file["steps"]
-#         connections = h5file["connection"]
-
-#         # print (grids.shape, connections.shape)
-
-#         return grids[:], connections[:], steps[:]
-
-
-def save_hdf5(grids, steps, connection, filename):
-    """Saves a hdf5 file to disk"""
-    mdir = os.path.dirname(filename)
-    if not os.path.exists(mdir):
-        os.makedirs(mdir)
-
-    with h5py.File(filename, "w") as h5file:
-        dset_grids = h5file.create_dataset(
-            "grids", data=grids, dtype="i", compression="gzip")
-        dset_grids.attrs["Description"] = "Grids"
-        h5file["grids"].dims[0].label = "h"  # row, height, y
-        h5file["grids"].dims[1].label = "w"  # col, width, x
-        dset_steps = h5file.create_dataset(
-            "steps", data=steps, dtype="i", compression="gzip")
-        dset_steps.attrs["Description"] = "Number of steps"
-        dset_connection = h5file.create_dataset(
-            "connection", data=connection, dtype="i", compression="gzip")
-        dset_connection.attrs["Description"] = "Connected or not"
-
-
-def create_grids(rows, cols, num_examples, positive_fraction):
-    """Creates a grid with a random walker on it"""
+def create_random_walkers(rows, cols, num_examples, positive_fraction=0.5):
+    """Creates a grid with a random walker on it
+    Returns:
+        grids, steps, connection
+    """
     start = timer()
     num_pos = int(num_examples * positive_fraction)
     num_neg = num_examples - num_pos
@@ -286,13 +267,13 @@ def create_grids(rows, cols, num_examples, positive_fraction):
         rows, cols, negative=True)
 
     for i in range(num_pos):
-        grids[i], steps[i] = next(pos_grid_generator)
-        connection[i] = 1
+        grids[i], steps[i], connection[i] = next(pos_grid_generator)
+        # connection[i] = 1
 
     for i in range(num_neg):
         i = i + num_pos
-        grids[i], steps[i] = next(neg_grid_generator)
-        connection[i] = 0
+        grids[i], steps[i], connection[i] = next(neg_grid_generator)
+        # connection[i] = 0
 
     end = timer()
 
@@ -313,35 +294,17 @@ def draw_random_sample(grids, steps=None, connection=None):
     sample = random.randint(0, grids.shape[0] - 1)
     draw_grid(grids[sample])
     print ("sample no. %d" % sample)
-    if steps is None:
+    if steps is not None:
         print ("steps: %d" % steps[sample])
-    if connection is None:
+    if connection is not None:
         print ("connection: %d" % connection[sample])
 
 
-def main():
-    pass
-
-    # parser = argparse.ArgumentParser(description="Generate a random walker on a grid.")
-    # parser.add_argument("-w", "--width", help="Width of grid.", type=int, default=8)
-    # parser.add_argument("-h", "--height", help="Height of grid.", type=int, default=8)
-    # parser.add_argument("-o", "--output", help="Name of file to save.", type=str, default="data.h5")
-    # parser.add_argument("-p", "--positive_fraction",
-    #                     help="Fraction of positive examples.", type=float, default=0.5)
-    # parser.add_argument("-n", "--num_examples", 
-    #                     help="Number of examples to generate.", type=int, default=10000)
-    # group = parser.add_mutually_exclusive_group()
-    # group.add_argument("-v", "--verbose", action="store_true", default=0)
-    # group.add_argument("-q", "--quiet", action="store_true", default=0)
-    # args = parser.parse_args()
-
-    # grids, steps, connection = create_grids(
-    #     args.height, args.width, args.num_examples, args.positive_fraction,
-    #     args.output, args.verbosity)
-    # save_hdf5(grids, steps, connection, args.output)
+def test():
+    grids, steps, connection = create_random_walkers(14, 14, 10)
 
 
 if __name__ == "__main__":
-    main()
+    test()
     # grids, _, _ = load_hdf5("data/connectivity_8x8.h5")
     # check_repeats(grids)

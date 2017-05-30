@@ -99,7 +99,7 @@ def board_generator(
             connectivity = connection_length
 
         if (min_connection_length <= connectivity <= max_connection_length):
-            print ("success after ", fail_count, " failures")
+            # print ("success after ", fail_count, " failures")
             fail_count = 0  # reset counter
             yield board, connectivity  # X, y
         else:
@@ -437,3 +437,6 @@ def maybe_generate_data(data_dir,
             statinfo = os.stat(filepath)
             print("Successfully generated", filename,
                   statinfo.st_size, "bytes.")
+
+if __name__ == '__main__':
+    pass

@@ -98,10 +98,12 @@ def load_hdf5(filename):
         grids, connections, steps: tuple
     """
     with h5py.File(filename, "r") as h5file:
-        grids = h5file["grids"]
-        steps = h5file["steps"]
-        connections = h5file["connection"]
+        examples = h5file["examples"]
+        labels = h5file["labels"]
+        # connections = h5file["connection"]
 
-        # print (grids.shape, connections.shape)
+        print (examples.shape, labels.shape)
+        print ("labels[0]: %s" % labels[0])
+        print ("examples[0]: %s" % examples[0])
 
-        return grids[:], connections[:], steps[:]
+        return examples[:], labels[:]

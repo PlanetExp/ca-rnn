@@ -2,12 +2,12 @@ import numpy as np
 import random
 
 
-def blob_generator(
-        width=20,
-        height=20,
+def blobs(
+        width=8,
+        height=8,
         k=3,
         min_extend=0,
-        max_extend=4,
+        max_extend=1,
         random_seed=None):
     """Generates a 1 to k number of blobs on a 2D grid
 
@@ -92,6 +92,12 @@ def blob_generator(
     return grid, count
 
 
+def blob_generator(*args, **kwargs):
+    while True:
+        yield blobs(*args, **kwargs)
+
+
 if __name__ == "__main__":
-    grid, count = blob_generator()
+    b = blob_generator(14, 14, k=4, max_extend=2)
+    grid, count = next(b)
     print (grid, count)

@@ -7,15 +7,11 @@ github.com/fredheidrich
 import operator as op
 import os
 import re
-import random
+import copy
 
-# import tensorflow as tf
 import pandas as pd
-import seaborn as sns  # pylint: disable=import-error
-# import numpy as np
+import seaborn as sns
 import matplotlib.pyplot as plt
-from random_walker import load_hdf5
-
 
 from tensorflow.python.summary.event_multiplexer import EventMultiplexer
 from tensorflow.python.summary.event_accumulator import EventAccumulator
@@ -33,23 +29,48 @@ def plot_grid(data, title=None):
     axes = sns.heatmap(data, cbar=False, linewidths=0.2)
     axes.set_title(title)
     sns.plt.show()
-    fig.savefig(title+".pdf", bbox_inches="tight")
+    fig.savefig("reports/figures/"+title+".pdf", bbox_inches="tight")
 
 
 def box_plot(data):
 
+    from collections import OrderedDict
+
     for key in data.keys():
         d = data[key]
-        sorted_keys, sorted_vals = zip(*sorted(d.items(), key=op.itemgetter(0)))
+
+        d2 = {int(k) : v for k, v in d.items()}
+        # for key, value in sorted(d.keys()):
+        #     d2[key] = value
+
+        # print ("d2: ",d2.keys())
+
+        sorted_keys, sorted_vals = zip(*sorted(d2.items(), key=op.itemgetter(0)))
+        # sorted_keys, sorted_vals = zip(*sorted(d.items(), key=op.itemgetter(0)))
 
         fig = plt.figure(1)
-        sns.set(context='notebook', style='ticks', font="Helvetica")
-        # sns.set_style("ticks", {"axes.edgecolor": "0"})
-        sns.utils.axlabel("state_dimension", "misclassification rate")
-        ax1 = sns.boxplot(data=sorted_vals, color="white", linewidth=0.9, width=0.15)
-        # sns.swarmplot(data=sorted_vals, size=6, edgecolor="black", linewidth=.9)
-        ax1.set_title("layer="+str(key))
+        # sns.set(context='notebook', style='ticks', font="Helvetica")
+        sns.set_style("ticks", {"axes.edgecolor": "0"})
+        sns.utils.axlabel("number of layers", "accuracy (%)")
+        ax1 = sns.boxplot(data=sorted_vals, color="white", linewidth=0.9, width=0.35)
+
+        # Swarm subsample
+        subsample = []
+        for i, v in enumerate(sorted_vals):
+            print ("i: ", i)
+            sub = len(sorted_vals[0]) // 30  # subsample to a set number
+            subsample.append(v[::sub])
+
+        # subsample = sorted_vals[:, ::sub]
+
+        sns.swarmplot(data=subsample, size=4, edgecolor="black", linewidth=.5)
+        ax1.set_title("Accuracies over layers at state dimension " + str(key))
         # category labels
+
+        # print ("type(sorted_keys[0]): %s" % type(sorted_keys[0]))
+        sorted_keys = [int(x) for x in sorted_keys]
+        print ("sorted_keys:", sorted_keys)
+
         sns.plt.xticks(plt.xticks()[0], sorted_keys)
         sns.despine()
         for i, box in enumerate(ax1.artists):
@@ -62,7 +83,7 @@ def box_plot(data):
             ax1.lines[6 * i].set_linestyle(ls="dashed")
             ax1.lines[6 * i + 1].set_linestyle(ls="dashed")
         sns.plt.show()
-        fig.savefig("layer="+ str(key) +".pdf", bbox_inches="tight")
+        fig.savefig("reports/figures/state="+ str(key) +".pdf", bbox_inches="tight")
 
 
 def plot_histogram(data, title=None, name=None):
@@ -84,12 +105,13 @@ def plot(data):
     sns.set_style("ticks")
     train, test = plt.plot(*data)
     plt.legend([train, test], ["train", "test"])
-    plt.title("Misclassification rate (" + HPARAM + ")")
+    layer = 10
+    plt.title("Accuracy with "+str(layer)+" layers at state dimension 14")
     sns.despine(trim=True)
-    plt.ylabel("fraction of misclassification")
+    plt.ylabel("accuracy")
     plt.xlabel("step")
     plt.show()
-    fig.savefig("msc"+ HPARAM +".pdf", bbox_inches="tight")
+    fig.savefig("reports/figures/accuracies"+str(layer)+".pdf", bbox_inches="tight")
 
 
 def scrape_all_data(directory):
@@ -101,13 +123,17 @@ def scrape_all_data(directory):
         data: dictionary of {layer: {state: data}}
     """
     data = {}
+
     # Create one multiplexer for all settings that contains all sub-runs
     paths = next(os.walk(directory))
     for path in paths[1]:
-        match = re.match(r"layers=(\d+),state=(\d+)", path)
+        match = re.match(r"lr=(\d)e-(\d+),layers=(\d+),state=(\d+)", path)
         assert match, "Directory structure not 'layers=i,state=j' for %s" % path
-        layer = match.group(1)
-        state = match.group(2)
+        layer = match.group(3)
+        state = match.group(4)
+
+        # print ("state: %s" % state)
+        # print ("layer: %s" % layer)
 
         # Add all runs from directory
         full_path = paths[0] + path
@@ -121,12 +147,16 @@ def scrape_all_data(directory):
                 path, "avg_accuracy/test")])
 
         # put in dictionary of {layer: {state: data}}
-        data.setdefault(layer, {}).update({state: scalars})
+        data.setdefault(state, {}).update({layer: scalars})
+        # data.setdefault(layer, {}).update({state: scalars})
+
     return data
 
+
 def scrape_data(directory):
-    full_path = os.path.join(directory, HPARAM, RUN)
-    accumulator = EventAccumulator(full_path)
+    # full_path = os.path.join(directory, HPARAM, RUN)
+    # accumulator = EventAccumulator(full_path)
+    accumulator = EventAccumulator(directory)
     accumulator.Reload()
 
     train_scalar = [event.value for event in accumulator.Scalars("avg_accuracy/train")]
@@ -134,9 +164,17 @@ def scrape_data(directory):
     test_scalar = [event.value for event in accumulator.Scalars("avg_accuracy/test")]
     test_steps = [event.step for event in accumulator.Scalars("avg_accuracy/test")]
 
-    return data
+    # subsample
+    # print (len(test_scalar))
+    # test_scalar = test_scalar[1::5]
+
+    # data = {1: {1: test_scalar}}
+
+    return train_steps, train_scalar, test_steps, test_scalar
+
 
 def main():
+    pass
     # layer/state dim accuracy box plots
     # data = {1: {1: [5.5, 0.5, 3.3, 0.3], 2: [10.5, 2.5, 0.1, 0.3]},
     #         2: {3: [50.5, 0.5, 5.3, 0.3], 5: [10.5, 6.5, 0.1, 0.3], 6: [88.5, 6.5, 33.1, 0.3]}}

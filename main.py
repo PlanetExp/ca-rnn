@@ -1,80 +1,76 @@
-import os
-import sys
-import json
-import random
+"""API to src"""
 
 import click
-import tensorflow as tf
+
+from src.data.saver import Saver
+from src.data.random_walker import create_random_walkers
+from src.visualization.visualize import draw_plot
+from src.visualization.visualize import Plot  # intenum
+from src.models.train_model import train
+
+# tmp
+from src.models.utils import generate_constrained_dataset
+from src.models.dataset import load_hdf5
 
 
-# from src.models import create_model
+import h5py
 
 
-DIR = os.path.dirname(os.path.realpath(__file__))
-
-FLAGS = tf.app.flags
-
-# Hyper parameter settings
-
-
-
-
-# Model configurations
-FLAGS.DEFINE_string(
-    "name", "model", "Unique name of model.")
-FLAGS.DEFINE_integer(
-    "num_layers", 1, "Number of convolution layers to stack.")
-FLAGS.DEFINE_integer(
-    "state_size", 1,
-    "Number of depth dimensions for each convolution layer in stack.")
-
-FLAGS.DEFINE_integer(
-    "batch_size", 256, "Set batch size per step")
-FLAGS.DEFINE_float(
-    "learning_rate", 0.04, "Set learning rate.")
-FLAGS.DEFINE_boolean('best', False, 'Force to use the best known configuration')
-FLAGS.DEFINE_boolean('evaluation', False, 'Use model for evaluation.')
+@click.group()
+# @click.option('-w', '--width', default=9, type=int)
+# @click.argument('input_filepath', type=click.Path())
+# @click.argument('output_filepath', type=click.Path())
+def cli():
+    pass
 
 
+@click.command()
+@click.option('-h', '--height', default=14, type=int)
+@click.option('-w', '--width', default=14, type=int)
+@click.option('-n', '--num-examples', default=60000, type=int)
+def data(width, height, num_examples):
+
+    # random walkers
+    # x, _, y = create_random_walkers(width, height, num_examples)
 
 
-# Environment configuration
-FLAGS.DEFINE_integer(
-    "run", 99, "Set subdirectory number to save logs to.")
-FLAGS.DEFINE_integer(
-    "log_frequency", 100, "Number of steps before printing logs.")
-FLAGS.DEFINE_integer(
-    "max_steps", 15000, "Set maximum number of steps to train for")
-FLAGS.DEFINE_string(
-    "data_dir", "data", "Directory of the dataset")
-FLAGS.DEFINE_string(
-    "train_dir", "tmp/train", "Directory to save train event files")
-FLAGS.DEFINE_string(
-    "checkpoint_dir", "tmp/train", "Directory to save checkpoints")
-FLAGS.DEFINE_string(
-    "logfile", "logfile", "Name of logfile")
-FLAGS.DEFINE_boolean(
-    "load_checkoint", False,
-    "Whether or not to load checkpoint and continue training from last step.")
+    # random grid    
+    x, y = generate_constrained_dataset((width,height), num_examples, stone_probability=0.45)
 
-FLAGS.DEFINE_boolean('debug', False, 'Debug mode')
-FLAGS.DEFINE_integer('random_seed', random.randint(0, sys.maxsize), 'Value of random seed')
+    for i, a in enumerate(y):
+        if a > 1:
+            y[i] = 1
+        else:
+            y[i] = 0
+
+    # print ("x: %s" % x)
+    # print ("y: %s" % y)
+    saver = Saver("data/test.h5")
+    saver.save_hdf5(x, y)
 
 
-# @click.command()
-# @click.option('gridsearch')
-def main(_):
-    config = FLAGS.FLAGS.__flags.copy()  # hack
-    print (config)
+@click.command()
+@click.argument('in_path', type=click.Path())
+@click.argument('plot_type', type=int)
+def vizualization(in_path, plot_type):
 
-    model = create_model(config)
+    # assert plot_type in Plot, "Plot %d not a supported type" % plot_type
+
+    data = []
+    if plot_type == Plot.HISTOGRAM or plot_type == Plot.GRID:
+        x, y = load_hdf5(in_path)
+        data.append(x)
+        data.append(y)
+
+        draw_plot(in_path, plot_type, data)
+    else:
+        draw_plot(in_path, plot_type, data)
 
 
-    model.train()
+cli.add_command(vizualization)
+cli.add_command(data)
 
-def test():
-    print ("tests")
 
 if __name__ == '__main__':
-    # tf.app.run()
-    tf.test.main()
+    cli()
+

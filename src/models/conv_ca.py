@@ -63,8 +63,8 @@ flags.DEFINE_float("learning_rate", 1e-4, "Set learning rate.")
 # Dataset parameters
 flags.DEFINE_integer("batch_size", 500, "Set batch size per step")
 flags.DEFINE_integer("num_classes", 2, "...")
-flags.DEFINE_integer("height", 14, "...")
-flags.DEFINE_integer("width", 14, "...")
+flags.DEFINE_integer("height", 8, "...")
+flags.DEFINE_integer("width", 8, "...")
 flags.DEFINE_integer("depth", 1, "...")
 flags.DEFINE_float("test_fraction", 0.2, "...")
 
@@ -78,8 +78,7 @@ flags.DEFINE_boolean("debug", False, "Flush directories before every run and pri
 # Directories
 flags.DEFINE_integer("run", 101, "Set subdirectory number to save logs to.")
 flags.DEFINE_string("data_dir", "", "Directory of the dataset")
-flags.DEFINE_string("train_dir", "../results", "Directory to save train event files")
-flags.DEFINE_string("checkpoint_dir", "../results", "Directory to save checkpoints")
+flags.DEFINE_string("result_dir", "", "Directory to save train event files")
 flags.DEFINE_string("logfile", "logfile", "Name of logfile")
 
 # Other options
@@ -90,7 +89,7 @@ REUSE_VARIABLES = True
 # If Leaky ReLU is used, set the rate of the leak
 LRELU_RATE = 0.01
 # Percent of dropout to apply to training process
-DROPOUT = 1.0
+DROPOUT = 0.9
 # Fraction of dataset to split into test samples
 TEST_SIZE = 0.5
 # Set epsilon for Adam optimizer
@@ -119,7 +118,8 @@ def conv_layer(inputs,
                             strides=[1, 1, 1, 1],
                             padding="SAME")
         # act = tf.nn.relu(conv + bias)
-        act = lrelu(conv + bias)  # add leaky ReLU
+        act = lrelu(conv)  # add leaky ReLU
+        # act = lrelu(conv + bias)  # add leaky ReLU
         # _add_summaries(w, b, act)
     return act
 
@@ -172,7 +172,7 @@ class ConvCA(object):
         # -----------------------
         # Increase input depth from 1 to state_size
         conv1 = conv_layer(
-            inputs, [3, 3, 1, FLAGS.state_size], name="input_conv")
+            inputs, [1, 1, 1, FLAGS.state_size], name="input_conv")
 
         # Cellular Automaton module
         # -------------------------
@@ -209,8 +209,16 @@ class ConvCA(object):
         # print (dropout)
 
         # self.debug = output  # debug local activations
-        sliced = tf.slice(dropout, [0, 0, 0, 0], [-1, 1, FLAGS.width, 1])
+        # sliced = tf.slice(dropout, [0, 0, 0, 0], [-1, 1, FLAGS.width, 1])
 
+        # Slice works just like numpy
+        # print ("dropout.get_shape(): %s" % dropout.get_shape())
+
+        # Shape: (batch, height, width, ...)
+        sliced = dropout[:, :1, :, :]
+        # print ("sliced.get_shape(): %s" % sliced.get_shape())
+
+        # Shape: (batch, 1, width, ...) -- that is only the top row
         flattened = tf.reshape(sliced, [-1, FLAGS.width])
         # flattened = tf.reshape(dropout, [-1, WIDTH * HEIGHT])
 
@@ -252,9 +260,11 @@ class ConvCA(object):
         with tf.name_scope("prediction"):
             # correct_prediction = tf.equal(
                 # tf.argmax(logits, 1), tf.cast(labels, tf.int64))
-            # accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
+
+            # in_top_k is the same as argmax 1 above
             correct = tf.nn.in_top_k(logits, labels, 1)
-            accuracy = tf.reduce_sum(tf.cast(correct, tf.float32))
+            accuracy = tf.reduce_mean(tf.cast(correct, tf.float32))
+
         self.prediction = accuracy
 
 
@@ -266,9 +276,9 @@ def conv_ca_model(run_path, args=None):
     sess = tf.Session()
 
     # Load datasets
-    grids, connections, _ = load_hdf5(FLAGS.data_dir)
-    grids = grids.reshape((-1, FLAGS.height, FLAGS.width, 1))
-    datasets = create_datasets(grids, connections, test_fraction=FLAGS.test_fraction)
+    examples, labels = load_hdf5(FLAGS.data_dir)
+    examples = examples.reshape((-1, FLAGS.height, FLAGS.width, 1))
+    datasets = create_datasets(examples, labels, test_fraction=FLAGS.test_fraction)
 
     # Keep probability for dropout layer
     global_step_tensor = tf.Variable(0, trainable=False, name="global_step")
@@ -336,13 +346,10 @@ def conv_ca_model(run_path, args=None):
                 duration = current_time - start_time
                 start_time = current_time
 
-                # compute the last log_frequency number of averages
-                avg_accuracy = np.sum(data["train_accuracy"]) / FLAGS.batch_size
-                avg_test_accuracy = np.sum(data["test_accuracy"]) / FLAGS.batch_size
-                avg_loss = np.sum(data["losses"]) / FLAGS.batch_size
-                # avg_accuracy = np.mean(data["train_accuracy"])
-                # avg_test_accuracy = np.mean(data["test_accuracy"])
-                # avg_loss = np.mean(data["losses"])
+                # compute averages
+                avg_accuracy = np.mean(data["train_accuracy"]) * 100
+                avg_test_accuracy = np.mean(data["test_accuracy"]) * 100
+                avg_loss = np.mean(data["losses"]) * 100
 
                 if avg_test_accuracy > best_test_accuracy:
                     best_test_accuracy = avg_test_accuracy
@@ -444,11 +451,13 @@ def main(argv=None):  # pylint: disable=unused-argument
         argv:
             list of command line arguments that is run with the script
     """
+    if FLAGS.result_dir == "":
+        raise "No directory flag --result_dir to save results"
 
     hparam = make_hparam_str(
         FLAGS.num_layers, FLAGS.state_size)
     run_path = os.path.join(
-        FLAGS.train_dir, PREFIX, hparam, "run" + str(FLAGS.run))
+        FLAGS.result_dir, PREFIX, hparam, "run" + str(FLAGS.run))
 
     if FLAGS.debug:
         _flush_directory(run_path)
